@@ -16,6 +16,7 @@ from a2a_scorecard.checks.protocol import ErrorHandling, ProtocolPing
 from a2a_scorecard.checks.reachability import EndpointReachable
 from a2a_scorecard.checks.security import SecuritySchemeSanity
 from a2a_scorecard.checks.signature import AgentCardSignatureStructure
+from a2a_scorecard.checks.streaming import StreamingProbe
 from a2a_scorecard.checks.tls import TlsPosture
 
 ALL_CHECKS: list[type[Check]] = [
@@ -26,6 +27,7 @@ ALL_CHECKS: list[type[Check]] = [
     AgentCardSemantics,
     ProtocolPing,
     ErrorHandling,
+    StreamingProbe,
     SecuritySchemeSanity,
     AgentCardSignatureStructure,
     TlsPosture,

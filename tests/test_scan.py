@@ -22,6 +22,10 @@ def test_compliant_agent_grades_a(fake_agent) -> None:
     # No signatures declared either: C031 SKIPs too (ADR-0009 consequence:
     # total weight rises from 120 to 130 but unsigned fixtures don't move).
     assert results["C031"].status is CheckStatus.SKIP
+    # No capabilities.streaming declared either: C022 SKIPs (ADR-0013
+    # consequence: total weight rises from 140 to 150 but this fixture's
+    # grade is unaffected).
+    assert results["C022"].status is CheckStatus.SKIP
     # The fixture is served over plain http: C032 SKIPs, there is no TLS to
     # inspect (ADR-0010 consequence: total weight rises from 130 to 140 but
     # plain-http fixtures don't move).
@@ -115,6 +119,11 @@ def test_auth_gated_endpoint_warns_ping(fake_agent) -> None:
     results = by_id(report)
     assert results["C020"].status is CheckStatus.WARN
     assert results["C021"].status is CheckStatus.SKIP
+    # This fixture's card declares capabilities.streaming: true, so a SKIP
+    # here can only come from ctx.auth_gated, not from a missing
+    # declaration (ADR-0013): the probe must not be attempted behind the gate.
+    assert results["C022"].status is CheckStatus.SKIP
+    assert "auth-gated" in results["C022"].evidence
 
 
 def test_unknown_method_wrong_error_code_warns(fake_agent) -> None:
@@ -243,3 +252,85 @@ def test_signed_not_a_list_fails(fake_agent) -> None:
     results = by_id(report)
     assert results["C031"].status is CheckStatus.FAIL
     assert "signatures is not a list" in results["C031"].evidence
+
+
+def test_streaming_happy_path_passes(fake_agent) -> None:
+    report = run_scan(fake_agent("streaming"), SETTINGS)
+    results = by_id(report)
+    assert results["C022"].status is CheckStatus.PASS, results["C022"].evidence
+
+
+def test_streaming_unary_drift_warns(fake_agent) -> None:
+    # Card declares streaming, but SendStreamingMessage gets an ordinary
+    # unary 200 JSON reply instead of an SSE stream: functional drift, WARN.
+    report = run_scan(fake_agent("streaming-unary"), SETTINGS)
+    results = by_id(report)
+    assert results["C022"].status is CheckStatus.WARN
+    assert "text/event-stream" in results["C022"].evidence
+
+
+def test_streaming_garbled_first_event_warns(fake_agent) -> None:
+    # Valid SSE stream, but the first event's payload is not a recognizable
+    # JSON-RPC response object: distinct WARN path from the unary-drift case.
+    report = run_scan(fake_agent("streaming-garbled"), SETTINGS)
+    results = by_id(report)
+    assert results["C022"].status is CheckStatus.WARN
+    assert "did not parse as a JSON-RPC response" in results["C022"].evidence
+
+
+def test_streaming_rejected_fails(fake_agent) -> None:
+    # SSE-framed method-not-found error: the card promised streaming and the
+    # wire rejects it.
+    report = run_scan(fake_agent("streaming-rejected"), SETTINGS)
+    results = by_id(report)
+    assert results["C022"].status is CheckStatus.FAIL
+    assert "-32601" in results["C022"].evidence or "Method not found" in results["C022"].evidence
+
+
+def test_streaming_timeout_fails(fake_agent) -> None:
+    # Valid SSE headers but no data event ever: must FAIL via the timeout
+    # path, bounded by a shrunk stream_timeout_s so the test stays fast.
+    report = run_scan(
+        fake_agent("streaming-stalls"), Settings(allow_http=True, stream_timeout_s=0.5)
+    )
+    results = by_id(report)
+    assert results["C022"].status is CheckStatus.FAIL
+    assert "no SSE data event" in results["C022"].evidence
+
+
+def test_streaming_trickle_deadline_fails(fake_agent) -> None:
+    # A keepalive-style target that never sends a data event but writes an
+    # SSE comment line every 0.1s (well inside stream_timeout_s) must not be
+    # able to hold the connection open indefinitely by resetting httpx's
+    # per-read idle timeout on every comment: the probe must enforce its own
+    # absolute deadline and FAIL once stream_timeout_s has elapsed.
+    report = run_scan(
+        fake_agent("streaming-trickle"), Settings(allow_http=True, stream_timeout_s=0.5)
+    )
+    results = by_id(report)
+    assert results["C022"].status is CheckStatus.FAIL
+    assert "no SSE data event" in results["C022"].evidence
+
+
+def test_streaming_multiline_event_passes(fake_agent) -> None:
+    # A legitimate SSE data event spread across several `data:` lines (e.g. a
+    # pretty-printed JSON body) must be reassembled by joining the lines with
+    # "\n", not truncated at the first line.
+    report = run_scan(fake_agent("streaming-multiline"), SETTINGS)
+    results = by_id(report)
+    assert results["C022"].status is CheckStatus.PASS, results["C022"].evidence
+
+
+def test_streaming_not_declared_skips(fake_agent) -> None:
+    # The plain compliant fixture does not declare capabilities.streaming.
+    report = run_scan(fake_agent("compliant"), SETTINGS)
+    results = by_id(report)
+    assert results["C022"].status is CheckStatus.SKIP
+    assert "capabilities.streaming" in results["C022"].evidence
+
+
+def test_streaming_probe_sends_exactly_one_request(fake_agent) -> None:
+    # docs/SCANNING-POLICY.md: at most one streaming request per scan.
+    url = fake_agent("streaming")
+    run_scan(url, SETTINGS)
+    assert fake_agent.streaming_request_count(url) == 1

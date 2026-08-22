@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import base64
 import json
+import time
 from collections.abc import Callable
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from threading import Thread
@@ -48,7 +49,9 @@ class FakeAgentHandler(BaseHTTPRequestHandler):
     # security-dangling-ref, security-plain-http, security-malformed,
     # security-schemes-not-object, v0-card-with-security, signed-well-formed,
     # signed-alg-none, signed-undecodable-protected, signed-symmetric-alg,
-    # signed-missing-key-hint, signed-not-a-list.
+    # signed-missing-key-hint, signed-not-a-list, streaming, streaming-unary,
+    # streaming-rejected, streaming-stalls, streaming-garbled,
+    # streaming-trickle, streaming-multiline.
     mode = "compliant"
 
     def log_message(self, format: str, *args: Any) -> None:  # noqa: A002
@@ -238,6 +241,22 @@ class FakeAgentHandler(BaseHTTPRequestHandler):
                 card = make_valid_card(self._base_url())
                 card["signatures"] = "oops"
                 self._send(200, json.dumps(card).encode())
+            elif self.mode in (
+                "streaming",
+                "streaming-unary",
+                "streaming-rejected",
+                "streaming-stalls",
+                "streaming-garbled",
+                "streaming-trickle",
+                "streaming-multiline",
+                "auth-gated",
+            ):
+                # auth-gated also declares streaming so C022's SKIP can be
+                # attributed to ctx.auth_gated, not to a missing declaration
+                # (tests/test_scan.py::test_auth_gated_endpoint_warns_ping).
+                card = make_valid_card(self._base_url())
+                card["capabilities"] = {"streaming": True}
+                self._send(200, json.dumps(card).encode())
             else:
                 self._send(200, json.dumps(make_valid_card(self._base_url())).encode())
         else:
@@ -259,6 +278,12 @@ class FakeAgentHandler(BaseHTTPRequestHandler):
             return
         rpc_id = req.get("id")
         method = req.get("method")
+        if method == "SendStreamingMessage":
+            self.server.streaming_request_count = (  # type: ignore[attr-defined]
+                getattr(self.server, "streaming_request_count", 0) + 1
+            )
+            self._handle_streaming(rpc_id)
+            return
         result = {
             "message": {
                 "messageId": "fixture-reply-1",
@@ -286,18 +311,132 @@ class FakeAgentHandler(BaseHTTPRequestHandler):
             }
         self._send(200, json.dumps(body).encode())
 
+    def _handle_streaming(self, rpc_id: Any) -> None:
+        """SendStreamingMessage responses, keyed by self.mode.
+
+        streaming: happy path, one SSE data event carrying a valid JSON-RPC
+        result. streaming-unary: drift - a plain 200 JSON reply, no SSE
+        framing at all. streaming-rejected: SSE framing (not plain JSON) with
+        a JSON-RPC method-not-found error as the first event - plain JSON
+        would only exercise the unary-drift WARN path, not the
+        rejected-error FAIL path, since the probe checks Content-Type before
+        it looks at the body. streaming-stalls: valid SSE headers, then no
+        data event ever, to exercise the timeout/FAIL path. streaming-garbled:
+        valid SSE headers, one data event whose payload is not a JSON-RPC
+        response object, to exercise the unparseable-first-event WARN path
+        distinctly from the unary-drift WARN. streaming-trickle: never sends
+        a data event, but writes an SSE comment line every 0.1s indefinitely
+        (bounded so the daemonic thread can't outlive the suite) - a
+        keepalive-style target that would defeat a naive per-read idle
+        timeout, to exercise the absolute-deadline enforcement. streaming-
+        multiline: one data event spread across several `data:` lines (a
+        pretty-printed JSON body), to exercise multi-line SSE event
+        reassembly.
+        """
+        if self.mode == "streaming-unary":
+            result = {
+                "message": {
+                    "messageId": "fixture-reply-1",
+                    "role": "ROLE_AGENT",
+                    "parts": [{"text": "pong"}],
+                }
+            }
+            body = {"jsonrpc": "2.0", "id": rpc_id, "result": result}
+            self._send(200, json.dumps(body).encode())
+            return
+
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream")
+        self.send_header("Cache-Control", "no-cache")
+        self.end_headers()
+        try:
+            if self.mode == "streaming-stalls":
+                # Never write a data event; sleep in short increments so the
+                # thread (daemonic under ThreadingHTTPServer) doesn't block
+                # the rest of the suite even if the client disconnects first.
+                for _ in range(15):
+                    time.sleep(0.1)
+                return
+            if self.mode == "streaming-trickle":
+                # Never write a data event either, but keep the connection
+                # alive with SSE comment lines more often than the client's
+                # deadline: a naive per-read idle timeout resets on each one
+                # and never fires, so this only terminates promptly if the
+                # client enforces an absolute wall-clock deadline. Bounded to
+                # 2s so the daemonic thread can't outlive the suite even if
+                # the client fails to disconnect.
+                for _ in range(20):
+                    self.wfile.write(b": keepalive\n\n")
+                    self.wfile.flush()
+                    time.sleep(0.1)
+                return
+            if self.mode == "streaming-multiline":
+                payload = {
+                    "jsonrpc": "2.0",
+                    "id": rpc_id,
+                    "result": {
+                        "statusUpdate": {
+                            "taskId": "fixture-task-1",
+                            "status": {"state": "TASK_STATE_COMPLETED"},
+                        }
+                    },
+                }
+                # Pretty-print so the event is legitimately spread across
+                # several `data:` lines, each newline already a valid
+                # whitespace boundary between JSON tokens.
+                for line in json.dumps(payload, indent=2).split("\n"):
+                    self.wfile.write(f"data: {line}\n".encode())
+                self.wfile.write(b"\n")
+                self.wfile.flush()
+                return
+            if self.mode == "streaming-rejected":
+                payload: Any = {
+                    "jsonrpc": "2.0",
+                    "id": rpc_id,
+                    "error": {"code": METHOD_NOT_FOUND, "message": "Method not found"},
+                }
+            elif self.mode == "streaming-garbled":
+                # Not a JSON-RPC response object at all: no "jsonrpc" key.
+                payload = {"unexpected": "shape"}
+            else:
+                payload = {
+                    "jsonrpc": "2.0",
+                    "id": rpc_id,
+                    "result": {
+                        "statusUpdate": {
+                            "taskId": "fixture-task-1",
+                            "status": {"state": "TASK_STATE_COMPLETED"},
+                        }
+                    },
+                }
+            self.wfile.write(f"data: {json.dumps(payload)}\n\n".encode())
+            self.wfile.flush()
+        except OSError:
+            # Client closed the connection first (e.g. after its own
+            # timeout); nothing left to do.
+            pass
+
 
 @pytest.fixture
 def fake_agent() -> Any:
     servers: list[ThreadingHTTPServer] = []
+    by_url: dict[str, ThreadingHTTPServer] = {}
 
     def make(mode: str = "compliant") -> str:
         handler = type("Handler", (FakeAgentHandler,), {"mode": mode})
         server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
+        server.streaming_request_count = 0  # type: ignore[attr-defined]
         Thread(target=server.serve_forever, daemon=True).start()
         servers.append(server)
-        return f"http://127.0.0.1:{server.server_address[1]}"
+        url = f"http://127.0.0.1:{server.server_address[1]}"
+        by_url[url] = server
+        return url
 
+    def streaming_request_count(url: str) -> int:
+        """Number of SendStreamingMessage requests the server at `url` saw."""
+        return int(by_url[url].streaming_request_count)  # type: ignore[attr-defined]
+
+    make.streaming_request_count = streaming_request_count  # type: ignore[attr-defined]
     yield make
     for server in servers:
         server.shutdown()

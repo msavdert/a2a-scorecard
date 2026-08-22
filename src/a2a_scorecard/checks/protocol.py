@@ -122,6 +122,7 @@ class ProtocolPing(Check):
         if status_code in (401, 403):
             details["auth_required"] = True
             ctx.outcomes[self.check_id + ":auth"] = CheckStatus.WARN
+            ctx.auth_gated = True
             return self.result(
                 CheckStatus.WARN,
                 evidence=f"HTTP {status_code}: endpoint requires auth; not probed further",

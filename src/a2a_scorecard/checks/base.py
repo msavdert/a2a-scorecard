@@ -34,6 +34,10 @@ class ProbeContext:
         self.has_declared_interface: bool = False
         self.jsonrpc_endpoint: str | None = None
         self.outcomes: dict[str, CheckStatus] = {}
+        # Set once a probe hits a 401/403: the policy forbids probing behind
+        # an auth gate, so later checks must SKIP rather than re-derive this
+        # from an earlier check's status text (docs/SCANNING-POLICY.md).
+        self.auth_gated: bool = False
 
 
 class Check(abc.ABC):
