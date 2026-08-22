@@ -47,6 +47,9 @@ policy violations.
 ## v0.4 - Public launch gate
 
 - Static scorecard site generated from the dataset (grades, trends).
+  Every displayed grade shows its probe coverage (ADR-0015); two
+  targets with the same letter but different coverage must be
+  visually distinguishable.
 - README rewritten for a public audience; SECURITY.md and opt-out process
   in place.
 - License/notice review completed.

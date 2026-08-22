@@ -65,4 +65,6 @@ def run_scan(url: str, settings: Settings | None = None) -> TargetReport:
         results=results,
         score=value,
         grade=grading.grade(value),
+        applicable_weight=grading.applicable_weight(results),
+        max_weight=grading.max_weight(results),
     )

@@ -24,6 +24,20 @@ _EARNED = {
 _BANDS = [(90.0, "A"), (75.0, "B"), (60.0, "C"), (40.0, "D")]
 
 
+def applicable_weight(results: list[CheckResult]) -> int:
+    """Weight the score was actually computed over: non-SKIP results only.
+
+    Reported next to max_weight as probe coverage (ADR-0015); does not
+    affect the score or grade.
+    """
+    return sum(r.weight for r in results if r.status is not CheckStatus.SKIP)
+
+
+def max_weight(results: list[CheckResult]) -> int:
+    """Total weight of every check that ran or was skipped in this scan."""
+    return sum(r.weight for r in results)
+
+
 def score(results: list[CheckResult]) -> float:
     applicable = [r for r in results if r.status is not CheckStatus.SKIP]
     total = sum(r.weight for r in applicable)

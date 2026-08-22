@@ -74,6 +74,11 @@ class TargetReport:
     results: list[CheckResult]
     score: float
     grade: str
+    # Probe coverage (ADR-0015): the weight the score was computed over
+    # versus the total registered weight. Informational; never alters
+    # score or grade.
+    applicable_weight: int
+    max_weight: int
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -84,5 +89,7 @@ class TargetReport:
             "spec_generation": self.spec_generation,
             "score": self.score,
             "grade": self.grade,
+            "applicable_weight": self.applicable_weight,
+            "max_weight": self.max_weight,
             "results": [r.to_dict() for r in self.results],
         }

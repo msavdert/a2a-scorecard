@@ -24,7 +24,11 @@ def _render_text(report: TargetReport) -> str:
         lines.append(f"  [{r.status.value.upper():7}] {r.check_id} {r.title}")
         if r.evidence:
             lines.append(f"            {r.evidence}")
-    lines += ["", f"score: {report.score}   grade: {report.grade}"]
+    lines += [
+        "",
+        f"score: {report.score}   grade: {report.grade}   "
+        f"(graded on {report.applicable_weight} of {report.max_weight} check weight)",
+    ]
     return "\n".join(lines)
 
 
