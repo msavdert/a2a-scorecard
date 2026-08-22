@@ -9,3 +9,5 @@ build/
 .ruff_cache/
 .coverage
 .audit/
+# omp-fleet wrapper work dirs (delegate logs, not provenance)
+research/_work/

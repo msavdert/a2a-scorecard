@@ -22,6 +22,10 @@ def test_compliant_agent_grades_a(fake_agent) -> None:
     # No signatures declared either: C031 SKIPs too (ADR-0009 consequence:
     # total weight rises from 120 to 130 but unsigned fixtures don't move).
     assert results["C031"].status is CheckStatus.SKIP
+    # The fixture is served over plain http: C032 SKIPs, there is no TLS to
+    # inspect (ADR-0010 consequence: total weight rises from 130 to 140 but
+    # plain-http fixtures don't move).
+    assert results["C032"].status is CheckStatus.SKIP
     assert report.spec_generation == "v1"
     assert report.score == 100.0
     assert report.grade == "A"
