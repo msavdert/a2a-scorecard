@@ -1,0 +1,7 @@
+a2a-scorecard
+Copyright 2026 msavdert
+
+This product includes files derived from the A2A protocol specification
+(https://github.com/a2aproject/A2A), Copyright the A2A project authors,
+licensed under the Apache License, Version 2.0. See
+src/a2a_scorecard/vendor/PROVENANCE.md for details.

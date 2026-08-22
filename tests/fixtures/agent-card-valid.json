@@ -1,0 +1,22 @@
+{
+  "name": "Example Agent",
+  "description": "A static valid v1 Agent Card used by schema tests.",
+  "version": "2.1.0",
+  "capabilities": {},
+  "defaultInputModes": ["text/plain"],
+  "defaultOutputModes": ["text/plain"],
+  "skills": [
+    {
+      "id": "summarize",
+      "name": "Summarize",
+      "description": "Summarizes documents."
+    }
+  ],
+  "supportedInterfaces": [
+    {
+      "url": "https://agent.example.com/a2a/v1",
+      "protocolBinding": "JSONRPC",
+      "protocolVersion": "1.0"
+    }
+  ]
+}
