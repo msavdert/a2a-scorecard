@@ -62,8 +62,9 @@ class FakeAgentHandler(BaseHTTPRequestHandler):
     # signed-alg-none, signed-undecodable-protected, signed-symmetric-alg,
     # signed-missing-key-hint, signed-not-a-list, streaming, streaming-unary,
     # streaming-rejected, streaming-stalls, streaming-garbled,
-    # streaming-trickle, streaming-multiline, rest-only-ok, rest-only-drift,
-    # rest-only-rejected, rest-only-auth-gated.
+    # streaming-trickle, streaming-multiline, streaming-no-newline,
+    # streaming-oversized, legacy-streaming-drift, rest-only-ok,
+    # rest-only-drift, rest-only-rejected, rest-only-auth-gated.
     mode = "compliant"
 
     def log_message(self, format: str, *args: Any) -> None:  # noqa: A002
@@ -261,6 +262,9 @@ class FakeAgentHandler(BaseHTTPRequestHandler):
                 "streaming-garbled",
                 "streaming-trickle",
                 "streaming-multiline",
+                "streaming-no-newline",
+                "streaming-oversized",
+                "legacy-streaming-drift",
                 "auth-gated",
             ):
                 # auth-gated also declares streaming so C022's SKIP can be
@@ -316,7 +320,16 @@ class FakeAgentHandler(BaseHTTPRequestHandler):
                 "parts": [{"text": "pong"}],
             }
         }
-        if method in ("SendMessage", "message/send"):
+        if method == "SendMessage" and self.mode == "legacy-streaming-drift":
+            # v1 method rejected so C020 falls through to its legacy
+            # message/send retry (tests/test_scan.py::
+            # test_legacy_drift_still_runs_streaming_probe).
+            body = {
+                "jsonrpc": "2.0",
+                "id": rpc_id,
+                "error": {"code": METHOD_NOT_FOUND, "message": "Method not found"},
+            }
+        elif method in ("SendMessage", "message/send"):
             body = {"jsonrpc": "2.0", "id": rpc_id, "result": result}
         elif self.mode == "no-error-on-unknown":
             # Misbehaving agent: answers even an unknown method with success.
@@ -383,7 +396,12 @@ class FakeAgentHandler(BaseHTTPRequestHandler):
         timeout, to exercise the absolute-deadline enforcement. streaming-
         multiline: one data event spread across several `data:` lines (a
         pretty-printed JSON body), to exercise multi-line SSE event
-        reassembly.
+        reassembly. streaming-no-newline: drips a few bytes containing no
+        line terminator at all every 0.1s, bounded to ~2s, to exercise the
+        absolute-deadline check in the byte-oriented read loop even though no
+        line (and so no event) ever completes. streaming-oversized: a single
+        write, larger than the probe's size bound, containing no line
+        terminator anywhere, to exercise the size-bound FAIL path.
         """
         if self.mode == "streaming-unary":
             result = {
@@ -421,6 +439,24 @@ class FakeAgentHandler(BaseHTTPRequestHandler):
                     self.wfile.write(b": keepalive\n\n")
                     self.wfile.flush()
                     time.sleep(0.1)
+                return
+            if self.mode == "streaming-no-newline":
+                # No line terminator ever: a naive line-buffered reader
+                # (e.g. httpx's iter_lines()) never hands control back to
+                # the caller, so this only trips a client's deadline check
+                # if that check runs per raw chunk. Bounded to ~2s so the
+                # daemonic thread can't outlive the suite.
+                for _ in range(20):
+                    self.wfile.write(b"x" * 50)
+                    self.wfile.flush()
+                    time.sleep(0.1)
+                return
+            if self.mode == "streaming-oversized":
+                # One write, no line terminator anywhere, bigger than the
+                # probe's size bound: exercises the size-bound FAIL path
+                # directly, independent of the deadline.
+                self.wfile.write(b"x" * (128 * 1024))
+                self.wfile.flush()
                 return
             if self.mode == "streaming-multiline":
                 payload = {

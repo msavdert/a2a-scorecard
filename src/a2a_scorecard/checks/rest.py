@@ -91,7 +91,6 @@ class RestBindingProbe(Check):
 
         details["http_status"] = resp.status_code
         if resp.status_code in (401, 403):
-            ctx.auth_gated = True
             return self.result(
                 CheckStatus.WARN,
                 evidence=f"HTTP {resp.status_code}: endpoint requires auth; not probed further",

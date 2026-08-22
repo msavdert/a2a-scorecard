@@ -21,6 +21,35 @@ from a2a_scorecard.models import CheckResult, CheckStatus
 
 METHOD = "SendStreamingMessage"
 
+# Hard cap on the total bytes read from a single streaming probe response.
+# A target that drips bytes without ever completing a line would otherwise
+# grow `_buffer` without bound while the byte-oriented read loop waits for a
+# line terminator (docs/SCANNING-POLICY.md: probes must be harmless to run,
+# including to the scanner's own memory).
+_MAX_RESPONSE_BYTES = 64 * 1024
+
+
+def _pop_line(buffer: bytes) -> tuple[bytes, bytes] | None:
+    """Split the first complete line off `buffer`, if any.
+
+    Returns (line_without_terminator, rest) or None if no line terminator has
+    arrived yet. Recognizes "\\n", "\\r\\n" and bare "\\r" as line endings
+    (SSE framing allows any of the three). A lone trailing "\\r" with nothing
+    after it yet is held back rather than treated as a terminator, since it
+    may be the first half of a "\\r\\n" pair split across two chunks.
+    """
+    idx_n = buffer.find(b"\n")
+    idx_r = buffer.find(b"\r")
+    if idx_r != -1 and idx_r == len(buffer) - 1 and (idx_n == -1 or idx_n > idx_r):
+        return None
+    if idx_n == -1 and idx_r == -1:
+        return None
+    if idx_r != -1 and (idx_n == -1 or idx_r < idx_n):
+        if buffer[idx_r + 1 : idx_r + 2] == b"\n":
+            return buffer[:idx_r], buffer[idx_r + 2 :]
+        return buffer[:idx_r], buffer[idx_r + 1 :]
+    return buffer[:idx_n], buffer[idx_n + 1 :]
+
 
 def _declares_streaming(card: dict[str, Any] | None) -> bool:
     if not isinstance(card, dict):
@@ -124,29 +153,64 @@ class StreamingProbe(Check):
                 # it and would otherwise be held open indefinitely. Enforce
                 # an absolute wall-clock deadline instead (SCANNING-POLICY.md:
                 # "first data event or Ns, whichever comes first"), checked
-                # on every loop iteration in addition to httpx's own
-                # ReadTimeout for the no-bytes-at-all case.
+                # on every chunk in addition to httpx's own ReadTimeout for
+                # the no-bytes-at-all case.
+                #
+                # Read raw bytes rather than httpx's line-decoded
+                # `iter_lines()`: that iterator only ever hands control back
+                # to the loop body once it has seen a line terminator, so a
+                # target that drips bytes without ever completing a line
+                # would starve both the deadline check and the size bound
+                # below while its internal buffer grows without limit. Line
+                # splitting is done by hand instead (see _pop_line).
+                #
+                # `iter_raw()` is called with no chunk_size: passing one
+                # makes httpx buffer internally until that many bytes have
+                # accumulated before yielding anything (see
+                # httpx._decoders.ByteChunker), which would silently
+                # reintroduce the exact starvation this rewrite exists to
+                # fix for a target that drips less than chunk_size per
+                # write. Each yielded chunk is instead exactly whatever the
+                # transport handed back from one underlying socket read,
+                # keeping both checks below responsive.
                 first_event: str | None = None
                 event_lines: list[str] = []
+                buffer = b""
+                total_read = 0
+                size_exceeded = False
                 deadline = time.monotonic() + timeout
                 try:
-                    for line in resp.iter_lines():
+                    for chunk in resp.iter_raw():
                         if time.monotonic() >= deadline:
                             break
-                        if line.startswith("data:"):
-                            event_lines.append(line[len("data:") :].strip())
-                            continue
-                        if line == "":
-                            # Blank line: SSE event boundary. A multi-line
-                            # `data:` event joins its lines with "\n"; a
-                            # blank line with nothing buffered is just
-                            # inter-event padding.
-                            if event_lines:
-                                first_event = "\n".join(event_lines)
+                        total_read += len(chunk)
+                        if total_read > _MAX_RESPONSE_BYTES:
+                            size_exceeded = True
+                            break
+                        buffer += chunk
+                        while True:
+                            popped = _pop_line(buffer)
+                            if popped is None:
                                 break
-                            continue
-                        # Other SSE fields (event:, id:, retry:) or comment
-                        # lines (":...") are not data; ignore and keep reading.
+                            line_bytes, buffer = popped
+                            line = line_bytes.decode("utf-8", errors="replace")
+                            if line.startswith("data:"):
+                                event_lines.append(line[len("data:") :].strip())
+                                continue
+                            if line == "":
+                                # Blank line: SSE event boundary. A
+                                # multi-line `data:` event joins its lines
+                                # with "\n"; a blank line with nothing
+                                # buffered is just inter-event padding.
+                                if event_lines:
+                                    first_event = "\n".join(event_lines)
+                                    break
+                                continue
+                            # Other SSE fields (event:, id:, retry:) or
+                            # comment lines (":...") are not data; ignore and
+                            # keep reading.
+                        if first_event is not None:
+                            break
                 except httpx.ReadTimeout:
                     first_event = None
                 finally:
@@ -155,6 +219,17 @@ class StreamingProbe(Check):
             return self.result(
                 CheckStatus.FAIL,
                 evidence=f"request failed: {exc}",
+                details=details,
+            )
+
+        if size_exceeded:
+            details["bytes_read"] = total_read
+            return self.result(
+                CheckStatus.FAIL,
+                evidence=(
+                    f"response exceeded size bound ({_MAX_RESPONSE_BYTES} bytes) "
+                    "without completing an SSE event"
+                ),
                 details=details,
             )
 

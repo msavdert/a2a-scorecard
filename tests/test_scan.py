@@ -338,3 +338,39 @@ def test_streaming_probe_sends_exactly_one_request(fake_agent) -> None:
     url = fake_agent("streaming")
     run_scan(url, SETTINGS)
     assert fake_agent.streaming_request_count(url) == 1
+
+
+def test_streaming_no_newline_deadline_fails(fake_agent) -> None:
+    # A target that drips bytes containing no line terminator at all must
+    # not be able to starve the probe's deadline check: the read loop is
+    # byte-oriented (iter_raw), not line-buffered, so the absolute deadline
+    # is checked on every chunk regardless of whether a line ever completes.
+    report = run_scan(
+        fake_agent("streaming-no-newline"), Settings(allow_http=True, stream_timeout_s=0.5)
+    )
+    results = by_id(report)
+    assert results["C022"].status is CheckStatus.FAIL
+    assert "no SSE data event" in results["C022"].evidence
+
+
+def test_streaming_oversized_response_fails(fake_agent) -> None:
+    # A single response chunk with no line terminator anywhere, larger than
+    # the probe's 64 KiB size bound, must FAIL on the size bound rather than
+    # buffering without limit while waiting for a line to complete.
+    report = run_scan(fake_agent("streaming-oversized"), SETTINGS)
+    results = by_id(report)
+    assert results["C022"].status is CheckStatus.FAIL
+    assert "exceeded size bound" in results["C022"].evidence
+
+
+def test_legacy_drift_still_runs_streaming_probe(fake_agent) -> None:
+    # C020 WARNs via its legacy message/send retry path (spec drift); C022
+    # must still run since WARN is a "runnable" outcome, not BLOCKED
+    # (docs/adr/0005-check-architecture-and-grading.md), so a card that also
+    # declares streaming must still get its SendStreamingMessage probed.
+    report = run_scan(fake_agent("legacy-streaming-drift"), SETTINGS)
+    results = by_id(report)
+    assert results["C020"].status is CheckStatus.WARN
+    assert "legacy" in results["C020"].evidence
+    assert results["C022"].status not in (CheckStatus.BLOCKED, CheckStatus.SKIP)
+    assert results["C022"].status is CheckStatus.PASS, results["C022"].evidence

@@ -7,8 +7,25 @@ never rename or reuse them. See docs/adr/0005-check-architecture-and-grading.md.
 from __future__ import annotations
 
 import enum
+import re
 from dataclasses import dataclass, field
 from typing import Any
+
+# Evidence is a free-text field that can echo bytes read off the network
+# (probe error messages, response snippets); it ends up printed raw to a
+# terminal by cli.py. Strip C0/C1 control characters and ESC (which drives
+# ANSI escape sequences) other than the two whitespace characters we want to
+# keep, and cap the length so a misbehaving or hostile target can't grow it
+# without bound.
+_EVIDENCE_MAX_LEN = 500
+_CONTROL_CHARS_RE = re.compile("[\x00-\x08\x0b-\x1f\x7f-\x9f]")
+
+
+def _sanitize_evidence(evidence: str) -> str:
+    cleaned = _CONTROL_CHARS_RE.sub(" ", evidence)
+    if len(cleaned) > _EVIDENCE_MAX_LEN:
+        cleaned = cleaned[:_EVIDENCE_MAX_LEN] + "..."
+    return cleaned
 
 
 class CheckStatus(enum.Enum):
@@ -32,6 +49,9 @@ class CheckResult:
     weight: int
     evidence: str = ""
     details: dict[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        self.evidence = _sanitize_evidence(self.evidence)
 
     def to_dict(self) -> dict[str, Any]:
         return {
