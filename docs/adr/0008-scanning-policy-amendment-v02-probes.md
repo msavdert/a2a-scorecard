@@ -1,7 +1,7 @@
 # ADR-0008: Scanning-policy amendment for TLS, streaming, and REST probes
 
-Date: 2026-08-21. Status: proposed - awaiting owner approval, required by
-the SCANNING-POLICY header before any of this lands in code.
+Date: 2026-08-21. Status: accepted - approved by the owner in session on
+2026-08-21, as the SCANNING-POLICY header requires.
 
 ## Context
 

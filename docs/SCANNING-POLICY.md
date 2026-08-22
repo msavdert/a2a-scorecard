@@ -26,6 +26,19 @@ Changes to this policy require an ADR and the owner's explicit approval.
   single legacy `message/send` retry sent only when the v1 method is
   rejected with method-not-found (ADR-0005).
 - One request with an unknown method name to observe error handling.
+- One TLS handshake to the target's host and port that carries no HTTP
+  request, reading only the negotiated protocol version and the
+  certificate presented. We never retry with downgraded client
+  configurations to test for weak-protocol acceptance (ADR-0008).
+- At most one streaming request per scan, only to targets whose card
+  declares streaming support. The connection is closed after the first
+  data event or 10 seconds, whichever comes first; its content falls
+  under the data-handling rules below (ADR-0008).
+- At most one benign REST `message:send` ping per scan, sent only to
+  targets whose card declares an HTTP+JSON interface and only when the
+  JSON-RPC pings are not applicable, so a scan sends at most two
+  message pings in total. The ping text identifies itself as a
+  conformance probe (ADR-0008).
 - Never: exploit payloads, prompt-injection attempts, auth bypass or
   credential guessing, fuzzing, or requests designed to consume meaningful
   compute on the target.
@@ -34,7 +47,9 @@ Changes to this policy require an ADR and the owner's explicit approval.
 
 ## Volume and pacing
 
-- A single scan sends fewer than 10 requests to a target.
+- A single scan sends fewer than 10 requests to a target, plus at most
+  one bare TLS handshake. At most one of the message pings may be a
+  streaming request.
 - Batch scanning serializes requests per host and honors HTTP 429 and
   Retry-After. Re-scan frequency for the public scorecard: at most daily
   per target.
