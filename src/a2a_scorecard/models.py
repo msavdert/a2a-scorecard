@@ -49,6 +49,7 @@ class TargetReport:
     target: str
     scanned_at: str
     scanner_version: str
+    grading_version: str
     spec_generation: str
     results: list[CheckResult]
     score: float
@@ -59,6 +60,7 @@ class TargetReport:
             "target": self.target,
             "scanned_at": self.scanned_at,
             "scanner_version": self.scanner_version,
+            "grading_version": self.grading_version,
             "spec_generation": self.spec_generation,
             "score": self.score,
             "grade": self.grade,

@@ -35,6 +35,10 @@ above is exercised by at least one test.
 - Target list format (YAML) with provenance for every listed endpoint.
 - Batch runner honoring the scanning policy (per-host serialization, 429).
 - Persistent JSON dataset of scan results (append-only, one file per run).
+  The dataset is the project's primary long-term product (ADR-0011):
+  every record is stamped with scanner version, grading methodology
+  version, and vendored spec version, so any historical grade can be
+  reproduced and explained.
 - Seed list harvested from public agent directories.
 
 Done when: one command produces a dataset for 50+ public targets without
@@ -47,6 +51,10 @@ policy violations.
   in place.
 - License/notice review completed.
 - Owner reviews results manually for false FAILs before anything goes live.
+- Pre-publication notification: before the first public dataset, every
+  listed endpoint owner is notified of their pending grade with a
+  correction/opt-out window of at least 14 days. No target appears on
+  the public scorecard without having had that window.
 
 Gate: the owner explicitly approves making the repository public and
 publishing the first scorecard. Until then everything stays private
@@ -58,3 +66,6 @@ publishing the first scorecard. Until then everything stays private
   authors ("scored A on a2a-scorecard").
 - Spec-version tracking: update vendored spec on new A2A releases via the
   PROVENANCE procedure; dual-validate during transitions.
+- Periodic "State of the A2A ecosystem" report generated from the
+  dataset's trend data (aggregate grades, common failure modes), the
+  public-facing artifact that the longitudinal dataset exists to feed.

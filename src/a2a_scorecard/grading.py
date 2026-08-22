@@ -5,6 +5,12 @@ from __future__ import annotations
 
 from a2a_scorecard.models import CheckResult, CheckStatus
 
+# Grading methodology version (ADR-0011): the check set, weights, earned
+# mapping and letter bands a report was graded under. Increments only when
+# a released grade for an unchanged target could change; stays "1" until
+# the first public dataset freezes it.
+GRADING_VERSION = "1"
+
 # Fraction of a check's weight earned per status. SKIP is excluded from
 # the denominator entirely; everything else counts against it.
 _EARNED = {

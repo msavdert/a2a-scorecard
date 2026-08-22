@@ -60,6 +60,7 @@ def run_scan(url: str, settings: Settings | None = None) -> TargetReport:
         target=url,
         scanned_at=datetime.datetime.now(datetime.UTC).isoformat(timespec="seconds"),
         scanner_version=a2a_scorecard.__version__,
+        grading_version=grading.GRADING_VERSION,
         spec_generation=spec_generation,
         results=results,
         score=value,

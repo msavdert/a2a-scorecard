@@ -15,7 +15,8 @@ from a2a_scorecard.scan import run_scan
 def _render_text(report: TargetReport) -> str:
     lines = [
         f"target:  {report.target}",
-        f"scanned: {report.scanned_at} (scanner {report.scanner_version})",
+        f"scanned: {report.scanned_at} "
+        f"(scanner {report.scanner_version}, grading v{report.grading_version})",
         f"card generation: {report.spec_generation}",
         "",
     ]
