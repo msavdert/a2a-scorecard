@@ -42,6 +42,17 @@ def make_valid_card(base_url: str) -> dict[str, Any]:
     }
 
 
+def make_rest_only_card(base_url: str) -> dict[str, Any]:
+    """Card declaring only an HTTP+JSON interface (C023 fixtures, ADR-0014):
+    no JSONRPC entry at all, so C020 SKIPs via its existing
+    non-JSONRPC-SKIP branch and C023's ping-budget SKIP does not fire."""
+    card = make_valid_card(base_url)
+    card["supportedInterfaces"] = [
+        {"url": base_url, "protocolBinding": "HTTP+JSON", "protocolVersion": "1.0"}
+    ]
+    return card
+
+
 class FakeAgentHandler(BaseHTTPRequestHandler):
     # Modes: compliant, no-card, bad-json, invalid-card, card-only, grpc-only,
     # legacy-location, v0-card, no-skills, no-interface, auth-gated,
@@ -51,7 +62,8 @@ class FakeAgentHandler(BaseHTTPRequestHandler):
     # signed-alg-none, signed-undecodable-protected, signed-symmetric-alg,
     # signed-missing-key-hint, signed-not-a-list, streaming, streaming-unary,
     # streaming-rejected, streaming-stalls, streaming-garbled,
-    # streaming-trickle, streaming-multiline.
+    # streaming-trickle, streaming-multiline, rest-only-ok, rest-only-drift,
+    # rest-only-rejected, rest-only-auth-gated.
     mode = "compliant"
 
     def log_message(self, format: str, *args: Any) -> None:  # noqa: A002
@@ -257,6 +269,13 @@ class FakeAgentHandler(BaseHTTPRequestHandler):
                 card = make_valid_card(self._base_url())
                 card["capabilities"] = {"streaming": True}
                 self._send(200, json.dumps(card).encode())
+            elif self.mode in (
+                "rest-only-ok",
+                "rest-only-drift",
+                "rest-only-rejected",
+                "rest-only-auth-gated",
+            ):
+                self._send(200, json.dumps(make_rest_only_card(self._base_url())).encode())
             else:
                 self._send(200, json.dumps(make_valid_card(self._base_url())).encode())
         else:
@@ -269,6 +288,12 @@ class FakeAgentHandler(BaseHTTPRequestHandler):
         if self.mode == "auth-gated":
             # Auth-gated endpoint: refuses before any JSON-RPC body is read.
             self._send(401, b'{"error": "unauthorized"}')
+            return
+        if self.path == "/message:send":
+            self.server.message_send_request_count = (  # type: ignore[attr-defined]
+                getattr(self.server, "message_send_request_count", 0) + 1
+            )
+            self._handle_rest_message_send()
             return
         length = int(self.headers.get("Content-Length", "0"))
         try:
@@ -310,6 +335,33 @@ class FakeAgentHandler(BaseHTTPRequestHandler):
                 "error": {"code": METHOD_NOT_FOUND, "message": "Method not found"},
             }
         self._send(200, json.dumps(body).encode())
+
+    def _handle_rest_message_send(self) -> None:
+        """POST /message:send responses, keyed by self.mode (ADR-0014, C023).
+
+        rest-only-ok: happy path, a recognizable Task response body.
+        rest-only-drift: HTTP 200 but a body not recognizable as a
+        Message/Task. rest-only-rejected: a non-2xx status, exercising the
+        FAIL-on-bad-status path. rest-only-auth-gated: 401, exercising the
+        auth-gated WARN path.
+        """
+        length = int(self.headers.get("Content-Length", "0"))
+        self.rfile.read(length)  # drain the request body
+        if self.mode == "rest-only-auth-gated":
+            self._send(401, b'{"error": "unauthorized"}')
+        elif self.mode == "rest-only-drift":
+            self._send(200, json.dumps({"unexpected": "shape"}).encode())
+        elif self.mode == "rest-only-rejected":
+            self._send(500, b"internal error", "text/plain")
+        else:
+            body = {
+                "task": {
+                    "id": "fixture-task-1",
+                    "contextId": "fixture-context-1",
+                    "status": {"state": "TASK_STATE_COMPLETED"},
+                }
+            }
+            self._send(200, json.dumps(body).encode())
 
     def _handle_streaming(self, rpc_id: Any) -> None:
         """SendStreamingMessage responses, keyed by self.mode.
@@ -426,6 +478,7 @@ def fake_agent() -> Any:
         handler = type("Handler", (FakeAgentHandler,), {"mode": mode})
         server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
         server.streaming_request_count = 0  # type: ignore[attr-defined]
+        server.message_send_request_count = 0  # type: ignore[attr-defined]
         Thread(target=server.serve_forever, daemon=True).start()
         servers.append(server)
         url = f"http://127.0.0.1:{server.server_address[1]}"
@@ -436,7 +489,12 @@ def fake_agent() -> Any:
         """Number of SendStreamingMessage requests the server at `url` saw."""
         return int(by_url[url].streaming_request_count)  # type: ignore[attr-defined]
 
+    def message_send_request_count(url: str) -> int:
+        """Number of POST /message:send requests the server at `url` saw."""
+        return int(by_url[url].message_send_request_count)  # type: ignore[attr-defined]
+
     make.streaming_request_count = streaming_request_count  # type: ignore[attr-defined]
+    make.message_send_request_count = message_send_request_count  # type: ignore[attr-defined]
     yield make
     for server in servers:
         server.shutdown()

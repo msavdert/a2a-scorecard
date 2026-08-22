@@ -30,6 +30,10 @@ def test_compliant_agent_grades_a(fake_agent) -> None:
     # inspect (ADR-0010 consequence: total weight rises from 130 to 140 but
     # plain-http fixtures don't move).
     assert results["C032"].status is CheckStatus.SKIP
+    # JSON-RPC was applicable and probed by C020: C023 SKIPs per the
+    # ping-budget rule (ADR-0014 consequence: total weight rises from 150
+    # to 160 but this fixture's grade is unaffected).
+    assert results["C023"].status is CheckStatus.SKIP
     assert report.spec_generation == "v1"
     assert report.score == 100.0
     assert report.grade == "A"
