@@ -56,6 +56,14 @@ Not affiliated with the A2A project, Google, or the Linux Foundation.
     mirror, or change visibility without the owner's explicit instruction.
 11. Never commit or push unless the owner asked for it in the session.
 
+## Review tiers
+
+Reviews follow docs/REVIEW-POLICY.md (ADR-0006): tier 0 `make check` every
+commit; tier 1 omp mechanical audit (tools/omp-audit-prompt.md, output is
+claims to verify, work dir `.audit/`) per push-batch/milestone; tier 2
+Claude reviewer subagent only at milestone gates, before the public
+launch, and after changes to grading.py / scan.py / checks/protocol.py.
+
 ## Everyday commands
 
     make install     # uv sync

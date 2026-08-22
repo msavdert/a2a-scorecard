@@ -21,8 +21,14 @@ fake compliant agent and correct F against a dead endpoint.
 - Security-scheme declaration sanity checks (declared vs. observed).
 - REST binding probe (`POST /message:send`) for agents declaring HTTP+JSON.
 
+Also in v0.2, from the 2026-08-21 tier-1 audit: backfill tests for the
+uncovered status paths - C001 WARN (plain http), C010 WARN (legacy card
+location), C012 SKIP (v0.x card fixture), C013 WARN and FAIL, C020 WARN
+(auth-gated and legacy-drift fake-agent modes), C021 WARN and FAIL.
+
 Done when: each new check has tests, an ADR entry if it changes grading,
-and the fake agent grows matching modes.
+the fake agent grows matching modes, and every check status path listed
+above is exercised by at least one test.
 
 ## v0.3 - Batch scanning and the dataset
 
