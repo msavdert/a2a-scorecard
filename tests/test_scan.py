@@ -19,6 +19,9 @@ def test_compliant_agent_grades_a(fake_agent) -> None:
     # No security declared at all: C030 SKIPs and must not affect the score
     # or grade (ADR-0007 consequence: v0.1 fixtures keep their grades).
     assert results["C030"].status is CheckStatus.SKIP
+    # No signatures declared either: C031 SKIPs too (ADR-0009 consequence:
+    # total weight rises from 120 to 130 but unsigned fixtures don't move).
+    assert results["C031"].status is CheckStatus.SKIP
     assert report.spec_generation == "v1"
     assert report.score == 100.0
     assert report.grade == "A"
@@ -145,6 +148,7 @@ def test_v0x_card_skips_security_check(fake_agent) -> None:
     report = run_scan(fake_agent("v0-card"), SETTINGS)
     results = by_id(report)
     assert results["C030"].status is CheckStatus.SKIP
+    assert results["C031"].status is CheckStatus.SKIP
 
 
 def test_v0x_card_with_security_still_skips(fake_agent) -> None:
@@ -155,6 +159,8 @@ def test_v0x_card_with_security_still_skips(fake_agent) -> None:
     results = by_id(report)
     assert results["C030"].status is CheckStatus.SKIP
     assert "not v1" in results["C030"].evidence
+    assert results["C031"].status is CheckStatus.SKIP
+    assert "not v1" in results["C031"].evidence
 
 
 def test_coherent_security_schemes_pass(fake_agent) -> None:
@@ -192,3 +198,44 @@ def test_security_schemes_not_object_fails(fake_agent) -> None:
     results = by_id(report)
     assert results["C030"].status is CheckStatus.FAIL
     assert "securitySchemes is not an object" in results["C030"].evidence
+
+
+def test_signed_well_formed_passes(fake_agent) -> None:
+    report = run_scan(fake_agent("signed-well-formed"), SETTINGS)
+    results = by_id(report)
+    assert results["C031"].status is CheckStatus.PASS, results["C031"].evidence
+
+
+def test_signed_alg_none_fails(fake_agent) -> None:
+    report = run_scan(fake_agent("signed-alg-none"), SETTINGS)
+    results = by_id(report)
+    assert results["C031"].status is CheckStatus.FAIL
+    assert "alg is 'none'" in results["C031"].evidence
+
+
+def test_signed_undecodable_protected_fails(fake_agent) -> None:
+    report = run_scan(fake_agent("signed-undecodable-protected"), SETTINGS)
+    results = by_id(report)
+    assert results["C031"].status is CheckStatus.FAIL
+    assert "not base64url-decodable" in results["C031"].evidence
+
+
+def test_signed_symmetric_alg_warns(fake_agent) -> None:
+    report = run_scan(fake_agent("signed-symmetric-alg"), SETTINGS)
+    results = by_id(report)
+    assert results["C031"].status is CheckStatus.WARN
+    assert "HS256" in results["C031"].evidence
+
+
+def test_signed_missing_key_hint_warns(fake_agent) -> None:
+    report = run_scan(fake_agent("signed-missing-key-hint"), SETTINGS)
+    results = by_id(report)
+    assert results["C031"].status is CheckStatus.WARN
+    assert "key-resolution hint" in results["C031"].evidence
+
+
+def test_signed_not_a_list_fails(fake_agent) -> None:
+    report = run_scan(fake_agent("signed-not-a-list"), SETTINGS)
+    results = by_id(report)
+    assert results["C031"].status is CheckStatus.FAIL
+    assert "signatures is not a list" in results["C031"].evidence

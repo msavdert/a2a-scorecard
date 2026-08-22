@@ -3,6 +3,7 @@ every HTTP request in the suite lands on this server on 127.0.0.1."""
 
 from __future__ import annotations
 
+import base64
 import json
 from collections.abc import Callable
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -12,6 +13,11 @@ from typing import Any
 import pytest
 
 METHOD_NOT_FOUND = -32601
+
+
+def _b64url(obj: dict[str, Any]) -> str:
+    raw = json.dumps(obj).encode()
+    return base64.urlsafe_b64encode(raw).decode().rstrip("=")
 
 
 def make_valid_card(base_url: str) -> dict[str, Any]:
@@ -40,7 +46,9 @@ class FakeAgentHandler(BaseHTTPRequestHandler):
     # legacy-location, v0-card, no-skills, no-interface, auth-gated,
     # wrong-error-code, no-error-on-unknown, security-coherent,
     # security-dangling-ref, security-plain-http, security-malformed,
-    # security-schemes-not-object, v0-card-with-security.
+    # security-schemes-not-object, v0-card-with-security, signed-well-formed,
+    # signed-alg-none, signed-undecodable-protected, signed-symmetric-alg,
+    # signed-missing-key-hint, signed-not-a-list.
     mode = "compliant"
 
     def log_message(self, format: str, *args: Any) -> None:  # noqa: A002
@@ -170,6 +178,65 @@ class FakeAgentHandler(BaseHTTPRequestHandler):
                     },
                     "securityRequirements": [{"schemes": {"bearer": {"list": []}}}],
                 }
+                self._send(200, json.dumps(card).encode())
+            elif self.mode == "signed-well-formed":
+                card = make_valid_card(self._base_url())
+                card["signatures"] = [
+                    {
+                        "protected": _b64url({"alg": "ES256", "kid": "key-1"}),
+                        "signature": base64.urlsafe_b64encode(b"fake-signature-bytes")
+                        .decode()
+                        .rstrip("="),
+                    }
+                ]
+                self._send(200, json.dumps(card).encode())
+            elif self.mode == "signed-alg-none":
+                card = make_valid_card(self._base_url())
+                card["signatures"] = [
+                    {
+                        "protected": _b64url({"alg": "none"}),
+                        "signature": base64.urlsafe_b64encode(b"fake-signature-bytes")
+                        .decode()
+                        .rstrip("="),
+                    }
+                ]
+                self._send(200, json.dumps(card).encode())
+            elif self.mode == "signed-undecodable-protected":
+                card = make_valid_card(self._base_url())
+                card["signatures"] = [
+                    {
+                        "protected": "not!valid!base64url!",
+                        "signature": base64.urlsafe_b64encode(b"fake-signature-bytes")
+                        .decode()
+                        .rstrip("="),
+                    }
+                ]
+                self._send(200, json.dumps(card).encode())
+            elif self.mode == "signed-symmetric-alg":
+                card = make_valid_card(self._base_url())
+                card["signatures"] = [
+                    {
+                        "protected": _b64url({"alg": "HS256", "kid": "key-1"}),
+                        "signature": base64.urlsafe_b64encode(b"fake-signature-bytes")
+                        .decode()
+                        .rstrip("="),
+                    }
+                ]
+                self._send(200, json.dumps(card).encode())
+            elif self.mode == "signed-missing-key-hint":
+                card = make_valid_card(self._base_url())
+                card["signatures"] = [
+                    {
+                        "protected": _b64url({"alg": "ES256"}),
+                        "signature": base64.urlsafe_b64encode(b"fake-signature-bytes")
+                        .decode()
+                        .rstrip("="),
+                    }
+                ]
+                self._send(200, json.dumps(card).encode())
+            elif self.mode == "signed-not-a-list":
+                card = make_valid_card(self._base_url())
+                card["signatures"] = "oops"
                 self._send(200, json.dumps(card).encode())
             else:
                 self._send(200, json.dumps(make_valid_card(self._base_url())).encode())
