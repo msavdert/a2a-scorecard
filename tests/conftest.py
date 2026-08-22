@@ -36,7 +36,7 @@ def make_valid_card(base_url: str) -> dict[str, Any]:
 
 
 class FakeAgentHandler(BaseHTTPRequestHandler):
-    # Modes: compliant, no-card, bad-json, invalid-card, card-only.
+    # Modes: compliant, no-card, bad-json, invalid-card, card-only, grpc-only.
     mode = "compliant"
 
     def log_message(self, format: str, *args: Any) -> None:  # noqa: A002
@@ -62,6 +62,14 @@ class FakeAgentHandler(BaseHTTPRequestHandler):
             elif self.mode == "invalid-card":
                 card = make_valid_card(self._base_url())
                 card["skills"] = "oops"
+                self._send(200, json.dumps(card).encode())
+            elif self.mode == "grpc-only":
+                card = make_valid_card(self._base_url())
+                # Spec-legal: gRPC-only agent, no JSON-RPC interface. The URL
+                # is never contacted because the JSON-RPC probes must SKIP.
+                card["supportedInterfaces"] = [
+                    {"url": "grpc.example.invalid:443", "protocolBinding": "GRPC"}
+                ]
                 self._send(200, json.dumps(card).encode())
             else:
                 self._send(200, json.dumps(make_valid_card(self._base_url())).encode())

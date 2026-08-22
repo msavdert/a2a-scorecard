@@ -29,6 +29,9 @@ class ProbeContext:
         # "v1" (supportedInterfaces card), "v0.x" (url/preferredTransport card),
         # or "unknown" until the card has been parsed.
         self.spec_generation: str = "unknown"
+        # True once the card is known to declare at least one interface URL of
+        # any binding; jsonrpc_endpoint stays None for e.g. gRPC-only agents.
+        self.has_declared_interface: bool = False
         self.jsonrpc_endpoint: str | None = None
         self.outcomes: dict[str, CheckStatus] = {}
 

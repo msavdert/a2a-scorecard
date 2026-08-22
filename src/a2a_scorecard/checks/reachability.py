@@ -17,7 +17,7 @@ class EndpointReachable(Check):
     def run(self, ctx: ProbeContext) -> CheckResult:
         try:
             resp = ctx.client.get(ctx.base_url)
-        except httpx.HTTPError as exc:
+        except (httpx.HTTPError, httpx.InvalidURL) as exc:
             return self.result(CheckStatus.FAIL, evidence=f"connection failed: {exc}")
         details = {"status_code": resp.status_code, "final_url": str(resp.url)}
         if str(resp.url).startswith("https://"):

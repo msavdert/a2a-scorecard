@@ -32,9 +32,10 @@ Not affiliated with the A2A project, Google, or the Linux Foundation.
 ## Hard rules
 
 1. Probes must be harmless. Never add a check that sends exploit payloads,
-   attempts auth bypass, floods a target, or mutates remote state beyond the
-   single benign SendMessage ping. Auth-gated endpoints are reported as
-   auth-gated, never probed behind the gate.
+   attempts auth bypass, floods a target, or mutates remote state beyond
+   the benign SendMessage ping(s) bounded by docs/SCANNING-POLICY.md.
+   Auth-gated endpoints are reported as auth-gated, never probed behind
+   the gate.
 2. Tests never touch the network. Every HTTP request in the test suite goes
    to the in-process fake agent on 127.0.0.1.
 3. Check IDs (C001, C010, ...) are permanent once released: never renumber,

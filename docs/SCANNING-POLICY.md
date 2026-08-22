@@ -21,8 +21,10 @@ Changes to this policy require an ADR and the owner's explicit approval.
 ## What a scan sends
 
 - Read-only HTTP GETs of public discovery documents.
-- At most one benign, spec-conformant `SendMessage` ping whose text
-  identifies itself as a conformance probe.
+- At most two benign, spec-conformant `SendMessage` pings whose text
+  identifies itself as a conformance probe: one v1 `SendMessage`, plus a
+  single legacy `message/send` retry sent only when the v1 method is
+  rejected with method-not-found (ADR-0005).
 - One request with an unknown method name to observe error handling.
 - Never: exploit payloads, prompt-injection attempts, auth bypass or
   credential guessing, fuzzing, or requests designed to consume meaningful

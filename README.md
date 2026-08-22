@@ -42,9 +42,10 @@ Details and rationale: `docs/adr/0005-check-architecture-and-grading.md`.
 
 The scanner validates Agent Cards against the official JSON Schema generated
 from the A2A project's `a2a.proto` (vendored at spec v1.0.1), detects
-v0.x-generation agents, and probes the JSON-RPC binding with a single benign
-`SendMessage` ping. What it will never do is written down in
-`docs/SCANNING-POLICY.md`.
+v0.x-generation agents, and probes the JSON-RPC binding with a benign
+`SendMessage` ping (retried once with the legacy method name when a v1
+card's endpoint rejects the v1 method). What it will never do is written
+down in `docs/SCANNING-POLICY.md`.
 
 ## Development
 

@@ -1,10 +1,11 @@
 """Stage 2: live JSON-RPC protocol probes.
 
-Both probes here are benign by construction (docs/SCANNING-POLICY.md):
-one spec-conformant SendMessage ping, and one intentionally unknown method
-name to observe error handling. Nothing mutates remote state beyond the
-single ping task, and auth is never bypassed: auth-gated endpoints are
-reported as such, not probed further.
+All probes here are benign by construction (docs/SCANNING-POLICY.md):
+at most two spec-conformant SendMessage pings (a v1 attempt plus a single
+legacy-method retry on -32601), and one intentionally unknown method name
+to observe error handling. Nothing mutates remote state beyond the ping
+task(s), and auth is never bypassed: auth-gated endpoints are reported as
+such, not probed further.
 """
 
 from __future__ import annotations
@@ -35,7 +36,7 @@ def _jsonrpc_call(
     }
     try:
         resp = ctx.client.post(endpoint, json=payload)
-    except httpx.HTTPError as exc:
+    except (httpx.HTTPError, httpx.InvalidURL) as exc:
         return None, None, f"request failed: {exc}"
     try:
         body = resp.json()
@@ -84,6 +85,12 @@ class ProtocolPing(Check):
     def run(self, ctx: ProbeContext) -> CheckResult:
         endpoint = ctx.jsonrpc_endpoint
         if endpoint is None:
+            if ctx.has_declared_interface:
+                return self.result(
+                    CheckStatus.SKIP,
+                    evidence="card declares only non-JSONRPC bindings (e.g. GRPC/HTTP+JSON); "
+                    "JSON-RPC probe not applicable in v0.1",
+                )
             return self.result(CheckStatus.FAIL, evidence="no interface URL to probe")
 
         if ctx.spec_generation == "v0.x":

@@ -35,7 +35,7 @@ class AgentCardPresent(Check):
             url = origin + path
             try:
                 resp = ctx.client.get(url)
-            except httpx.HTTPError as exc:
+            except (httpx.HTTPError, httpx.InvalidURL) as exc:
                 return self.result(CheckStatus.FAIL, evidence=f"fetch failed: {exc}")
             if resp.status_code == 200:
                 ctx.card_url = url
@@ -130,35 +130,64 @@ class AgentCardSemantics(Check):
         for fld in ("name", "description", "version"):
             if not str(card.get(fld, "")).strip():
                 problems.append(f"missing or empty '{fld}'")
-        endpoint = _jsonrpc_endpoint(ctx)
-        if endpoint is None:
+        interface_urls = _interface_urls(ctx)
+        ctx.has_declared_interface = bool(interface_urls)
+        if not interface_urls:
             problems.append("no usable interface URL (supportedInterfaces / url)")
         else:
+            endpoint = _jsonrpc_endpoint(ctx)
             ctx.jsonrpc_endpoint = endpoint
-            if not endpoint.startswith("https://") and not ctx.settings.allow_http:
+            # HTTPS applies to HTTP-based bindings only; gRPC addresses are
+            # host:port by spec, so non-JSONRPC interfaces are not judged here.
+            if (
+                endpoint is not None
+                and not endpoint.startswith("https://")
+                and not ctx.settings.allow_http
+            ):
                 problems.append(f"interface URL is not HTTPS: {endpoint}")
         if not card.get("skills"):
             problems.append("no skills declared")
         if problems:
             return self.result(
-                CheckStatus.WARN if ctx.jsonrpc_endpoint else CheckStatus.FAIL,
+                CheckStatus.WARN if interface_urls else CheckStatus.FAIL,
                 evidence="; ".join(problems),
                 details={"problems": problems},
             )
         return self.result(CheckStatus.PASS, evidence="name, version, interface and skills present")
 
 
-def _jsonrpc_endpoint(ctx: ProbeContext) -> str | None:
+def _interface_urls(ctx: ProbeContext) -> list[str]:
     assert ctx.card is not None
     card = ctx.card
     if ctx.spec_generation == "v1":
         interfaces = card.get("supportedInterfaces") or []
-        candidates = [
-            i for i in interfaces if isinstance(i, dict) and str(i.get("url", "")).strip()
+        return [
+            str(i["url"])
+            for i in interfaces
+            if isinstance(i, dict) and str(i.get("url", "")).strip()
         ]
-        for i in candidates:
-            if i.get("protocolBinding", "") in ("JSONRPC", ""):
+    url = str(card.get("url", "")).strip()
+    return [url] if url else []
+
+
+def _jsonrpc_endpoint(ctx: ProbeContext) -> str | None:
+    """URL of a JSONRPC-suitable interface, or None.
+
+    Declaring only other bindings (GRPC, HTTP+JSON) is spec-legal, so the
+    absence of a JSON-RPC interface must never be treated as a defect;
+    callers SKIP the JSON-RPC probes instead (ADR-0005).
+    """
+    assert ctx.card is not None
+    card = ctx.card
+    if ctx.spec_generation == "v1":
+        interfaces = card.get("supportedInterfaces") or []
+        for i in interfaces:
+            if (
+                isinstance(i, dict)
+                and str(i.get("url", "")).strip()
+                and i.get("protocolBinding", "") in ("JSONRPC", "")
+            ):
                 return str(i["url"])
-        return str(candidates[0]["url"]) if candidates else None
+        return None
     url = str(card.get("url", "")).strip()
     return url or None

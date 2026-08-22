@@ -55,6 +55,24 @@ def test_card_without_protocol_endpoint(fake_agent) -> None:
     assert report.grade == "C"
 
 
+def test_grpc_only_card_skips_jsonrpc_probes(fake_agent) -> None:
+    # A card legally declaring only non-JSONRPC bindings must not be punished
+    # for the JSON-RPC probes it cannot answer (reviewer finding, ADR-0005).
+    report = run_scan(fake_agent("grpc-only"), SETTINGS)
+    results = by_id(report)
+    assert results["C013"].status is CheckStatus.PASS
+    assert results["C020"].status is CheckStatus.SKIP
+    assert results["C021"].status is CheckStatus.SKIP
+    assert report.grade == "A"
+
+
+def test_malformed_url_fails_reachability_not_error() -> None:
+    report = run_scan("http://[bad", Settings(allow_http=True, timeout_s=0.5))
+    results = by_id(report)
+    assert results["C001"].status is CheckStatus.FAIL
+    assert report.grade == "F"
+
+
 def test_unreachable_target_fails_cleanly() -> None:
     # Localhost discard port: refused immediately, no traffic leaves the machine.
     report = run_scan("http://127.0.0.1:9", Settings(allow_http=True, timeout_s=0.5))

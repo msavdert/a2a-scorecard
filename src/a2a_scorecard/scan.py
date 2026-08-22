@@ -27,11 +27,24 @@ def run_scan(url: str, settings: Settings | None = None) -> TargetReport:
         ctx = ProbeContext(url, client, settings)
         for check_cls in sorted(ALL_CHECKS, key=lambda c: (c.stage, c.check_id)):
             check = check_cls()
-            blocked_on = [dep for dep in check.requires if ctx.outcomes.get(dep) not in _RUNNABLE]
+            dep_status = [(dep, ctx.outcomes.get(dep)) for dep in check.requires]
+            blocked_on = [
+                dep
+                for dep, status in dep_status
+                if status is not CheckStatus.SKIP and status not in _RUNNABLE
+            ]
+            skipped_on = [dep for dep, status in dep_status if status is CheckStatus.SKIP]
             if blocked_on:
                 result = check_cls.result(
                     CheckStatus.BLOCKED,
                     evidence=f"dependency not satisfied: {', '.join(blocked_on)}",
+                )
+            elif skipped_on:
+                # Not-applicable cascades: a SKIPped dependency must not turn
+                # into a scored BLOCKED downstream (ADR-0005).
+                result = check_cls.result(
+                    CheckStatus.SKIP,
+                    evidence=f"dependency not applicable: {', '.join(skipped_on)}",
                 )
             else:
                 try:
