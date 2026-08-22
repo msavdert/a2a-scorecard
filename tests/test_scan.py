@@ -66,6 +66,61 @@ def test_grpc_only_card_skips_jsonrpc_probes(fake_agent) -> None:
     assert report.grade == "A"
 
 
+def test_plain_http_warns_reachability(fake_agent) -> None:
+    # Same endpoint that PASSes C001 under SETTINGS (allow_http=True) must
+    # WARN once plain http is no longer allowed (docs/SCANNING-POLICY.md).
+    report = run_scan(fake_agent("compliant"), Settings(allow_http=False))
+    results = by_id(report)
+    assert results["C001"].status is CheckStatus.WARN
+
+
+def test_legacy_card_location_warns(fake_agent) -> None:
+    report = run_scan(fake_agent("legacy-location"), SETTINGS)
+    results = by_id(report)
+    assert results["C010"].status is CheckStatus.WARN
+
+
+def test_v0x_card_skips_schema_check(fake_agent) -> None:
+    report = run_scan(fake_agent("v0-card"), SETTINGS)
+    results = by_id(report)
+    assert report.spec_generation == "v0.x"
+    assert results["C012"].status is CheckStatus.SKIP
+
+
+def test_card_without_skills_warns_semantics(fake_agent) -> None:
+    report = run_scan(fake_agent("no-skills"), SETTINGS)
+    results = by_id(report)
+    assert results["C013"].status is CheckStatus.WARN
+
+
+def test_card_without_interface_fails_semantics(fake_agent) -> None:
+    report = run_scan(fake_agent("no-interface"), SETTINGS)
+    results = by_id(report)
+    assert results["C013"].status is CheckStatus.FAIL
+    assert results["C020"].status is CheckStatus.BLOCKED
+
+
+def test_auth_gated_endpoint_warns_ping(fake_agent) -> None:
+    report = run_scan(fake_agent("auth-gated"), SETTINGS)
+    results = by_id(report)
+    assert results["C020"].status is CheckStatus.WARN
+    assert results["C021"].status is CheckStatus.SKIP
+
+
+def test_unknown_method_wrong_error_code_warns(fake_agent) -> None:
+    report = run_scan(fake_agent("wrong-error-code"), SETTINGS)
+    results = by_id(report)
+    assert results["C020"].status is CheckStatus.PASS
+    assert results["C021"].status is CheckStatus.WARN
+
+
+def test_unknown_method_without_error_fails(fake_agent) -> None:
+    report = run_scan(fake_agent("no-error-on-unknown"), SETTINGS)
+    results = by_id(report)
+    assert results["C020"].status is CheckStatus.PASS
+    assert results["C021"].status is CheckStatus.FAIL
+
+
 def test_malformed_url_fails_reachability_not_error() -> None:
     report = run_scan("http://[bad", Settings(allow_http=True, timeout_s=0.5))
     results = by_id(report)

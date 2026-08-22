@@ -36,7 +36,9 @@ def make_valid_card(base_url: str) -> dict[str, Any]:
 
 
 class FakeAgentHandler(BaseHTTPRequestHandler):
-    # Modes: compliant, no-card, bad-json, invalid-card, card-only, grpc-only.
+    # Modes: compliant, no-card, bad-json, invalid-card, card-only, grpc-only,
+    # legacy-location, v0-card, no-skills, no-interface, auth-gated,
+    # wrong-error-code, no-error-on-unknown.
     mode = "compliant"
 
     def log_message(self, format: str, *args: Any) -> None:  # noqa: A002
@@ -71,6 +73,34 @@ class FakeAgentHandler(BaseHTTPRequestHandler):
                     {"url": "grpc.example.invalid:443", "protocolBinding": "GRPC"}
                 ]
                 self._send(200, json.dumps(card).encode())
+            elif self.mode == "legacy-location":
+                # Card served only at the pre-v0.3.0 well-known path.
+                if self.path == "/.well-known/agent-card.json":
+                    self._send(404, b"not found", "text/plain")
+                else:
+                    self._send(200, json.dumps(make_valid_card(self._base_url())).encode())
+            elif self.mode == "v0-card":
+                # Legacy-generation card: "url" + "protocolVersion", no
+                # "supportedInterfaces" (ADR-0005 generation detection).
+                card = {
+                    "name": "Fixture Agent v0",
+                    "description": "Legacy-generation fixture card.",
+                    "version": "0.9.0",
+                    "url": self._base_url(),
+                    "protocolVersion": "0.3",
+                    "skills": [
+                        {"id": "echo", "name": "Echo", "description": "Echoes a short reply."}
+                    ],
+                }
+                self._send(200, json.dumps(card).encode())
+            elif self.mode == "no-skills":
+                card = make_valid_card(self._base_url())
+                card["skills"] = []
+                self._send(200, json.dumps(card).encode())
+            elif self.mode == "no-interface":
+                card = make_valid_card(self._base_url())
+                del card["supportedInterfaces"]
+                self._send(200, json.dumps(card).encode())
             else:
                 self._send(200, json.dumps(make_valid_card(self._base_url())).encode())
         else:
@@ -80,6 +110,10 @@ class FakeAgentHandler(BaseHTTPRequestHandler):
         if self.mode == "card-only":
             self._send(404, b"not found", "text/plain")
             return
+        if self.mode == "auth-gated":
+            # Auth-gated endpoint: refuses before any JSON-RPC body is read.
+            self._send(401, b'{"error": "unauthorized"}')
+            return
         length = int(self.headers.get("Content-Length", "0"))
         try:
             req = json.loads(self.rfile.read(length))
@@ -87,15 +121,26 @@ class FakeAgentHandler(BaseHTTPRequestHandler):
             self._send(400, b"bad request", "text/plain")
             return
         rpc_id = req.get("id")
-        if req.get("method") == "SendMessage":
-            result = {
-                "message": {
-                    "messageId": "fixture-reply-1",
-                    "role": "ROLE_AGENT",
-                    "parts": [{"text": "pong"}],
-                }
+        method = req.get("method")
+        result = {
+            "message": {
+                "messageId": "fixture-reply-1",
+                "role": "ROLE_AGENT",
+                "parts": [{"text": "pong"}],
             }
+        }
+        if method in ("SendMessage", "message/send"):
             body = {"jsonrpc": "2.0", "id": rpc_id, "result": result}
+        elif self.mode == "no-error-on-unknown":
+            # Misbehaving agent: answers even an unknown method with success.
+            body = {"jsonrpc": "2.0", "id": rpc_id, "result": result}
+        elif self.mode == "wrong-error-code":
+            # Misbehaving agent: rejects the unknown method with the wrong code.
+            body = {
+                "jsonrpc": "2.0",
+                "id": rpc_id,
+                "error": {"code": -32602, "message": "Invalid params"},
+            }
         else:
             body = {
                 "jsonrpc": "2.0",
