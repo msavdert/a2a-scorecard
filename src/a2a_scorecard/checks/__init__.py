@@ -14,6 +14,7 @@ from a2a_scorecard.checks.agent_card import (
 from a2a_scorecard.checks.base import Check, ProbeContext
 from a2a_scorecard.checks.protocol import ErrorHandling, ProtocolPing
 from a2a_scorecard.checks.reachability import EndpointReachable
+from a2a_scorecard.checks.security import SecuritySchemeSanity
 
 ALL_CHECKS: list[type[Check]] = [
     EndpointReachable,
@@ -23,6 +24,7 @@ ALL_CHECKS: list[type[Check]] = [
     AgentCardSemantics,
     ProtocolPing,
     ErrorHandling,
+    SecuritySchemeSanity,
 ]
 
 __all__ = ["ALL_CHECKS", "Check", "ProbeContext"]

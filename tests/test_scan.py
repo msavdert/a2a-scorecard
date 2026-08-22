@@ -16,6 +16,9 @@ def test_compliant_agent_grades_a(fake_agent) -> None:
         assert results[check_id].status is CheckStatus.PASS, (
             f"{check_id}: {results[check_id].evidence}"
         )
+    # No security declared at all: C030 SKIPs and must not affect the score
+    # or grade (ADR-0007 consequence: v0.1 fixtures keep their grades).
+    assert results["C030"].status is CheckStatus.SKIP
     assert report.spec_generation == "v1"
     assert report.score == 100.0
     assert report.grade == "A"
@@ -134,3 +137,58 @@ def test_unreachable_target_fails_cleanly() -> None:
     results = by_id(report)
     assert results["C001"].status is CheckStatus.FAIL
     assert report.grade == "F"
+
+
+def test_v0x_card_skips_security_check(fake_agent) -> None:
+    # ADR-0007: the sanity rules are written against the v1 card shape, so a
+    # v0.x-generation card SKIPs regardless of any security declaration.
+    report = run_scan(fake_agent("v0-card"), SETTINGS)
+    results = by_id(report)
+    assert results["C030"].status is CheckStatus.SKIP
+
+
+def test_v0x_card_with_security_still_skips(fake_agent) -> None:
+    # Isolates the v1-only SKIP branch from the no-declaration SKIP branch in
+    # test_v0x_card_skips_security_check: this card declares a coherent
+    # security scheme, so the only reason it can SKIP is the generation check.
+    report = run_scan(fake_agent("v0-card-with-security"), SETTINGS)
+    results = by_id(report)
+    assert results["C030"].status is CheckStatus.SKIP
+    assert "not v1" in results["C030"].evidence
+
+
+def test_coherent_security_schemes_pass(fake_agent) -> None:
+    report = run_scan(fake_agent("security-coherent"), SETTINGS)
+    results = by_id(report)
+    assert results["C030"].status is CheckStatus.PASS, results["C030"].evidence
+    assert report.grade == "A"
+
+
+def test_dangling_security_reference_fails(fake_agent) -> None:
+    report = run_scan(fake_agent("security-dangling-ref"), SETTINGS)
+    results = by_id(report)
+    assert results["C030"].status is CheckStatus.FAIL
+    assert "ghost" in results["C030"].evidence
+
+
+def test_plain_http_auth_url_warns(fake_agent) -> None:
+    report = run_scan(fake_agent("security-plain-http"), SETTINGS)
+    results = by_id(report)
+    assert results["C030"].status is CheckStatus.WARN
+    assert "http://" in results["C030"].evidence
+
+
+def test_malformed_security_scheme_fails(fake_agent) -> None:
+    report = run_scan(fake_agent("security-malformed"), SETTINGS)
+    results = by_id(report)
+    assert results["C030"].status is CheckStatus.FAIL
+    assert "apikey" in results["C030"].evidence
+
+
+def test_security_schemes_not_object_fails(fake_agent) -> None:
+    # securitySchemes is a list, not an object: must FAIL with evidence, not
+    # crash the check (which scan.py would otherwise report as ERROR).
+    report = run_scan(fake_agent("security-schemes-not-object"), SETTINGS)
+    results = by_id(report)
+    assert results["C030"].status is CheckStatus.FAIL
+    assert "securitySchemes is not an object" in results["C030"].evidence

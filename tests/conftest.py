@@ -38,7 +38,9 @@ def make_valid_card(base_url: str) -> dict[str, Any]:
 class FakeAgentHandler(BaseHTTPRequestHandler):
     # Modes: compliant, no-card, bad-json, invalid-card, card-only, grpc-only,
     # legacy-location, v0-card, no-skills, no-interface, auth-gated,
-    # wrong-error-code, no-error-on-unknown.
+    # wrong-error-code, no-error-on-unknown, security-coherent,
+    # security-dangling-ref, security-plain-http, security-malformed,
+    # security-schemes-not-object, v0-card-with-security.
     mode = "compliant"
 
     def log_message(self, format: str, *args: Any) -> None:  # noqa: A002
@@ -100,6 +102,74 @@ class FakeAgentHandler(BaseHTTPRequestHandler):
             elif self.mode == "no-interface":
                 card = make_valid_card(self._base_url())
                 del card["supportedInterfaces"]
+                self._send(200, json.dumps(card).encode())
+            elif self.mode == "security-coherent":
+                card = make_valid_card(self._base_url())
+                card["securitySchemes"] = {
+                    "bearer": {"httpAuthSecurityScheme": {"scheme": "Bearer"}},
+                    "google": {
+                        "openIdConnectSecurityScheme": {
+                            "openIdConnectUrl": (
+                                "https://accounts.example.com/.well-known/openid-configuration"
+                            )
+                        }
+                    },
+                }
+                card["securityRequirements"] = [{"schemes": {"bearer": {"list": []}}}]
+                self._send(200, json.dumps(card).encode())
+            elif self.mode == "security-dangling-ref":
+                card = make_valid_card(self._base_url())
+                card["securitySchemes"] = {
+                    "bearer": {"httpAuthSecurityScheme": {"scheme": "Bearer"}},
+                }
+                card["securityRequirements"] = [{"schemes": {"ghost": {"list": []}}}]
+                self._send(200, json.dumps(card).encode())
+            elif self.mode == "security-plain-http":
+                card = make_valid_card(self._base_url())
+                card["securitySchemes"] = {
+                    "oauth2": {
+                        "oauth2SecurityScheme": {
+                            "flows": {
+                                "authorizationCode": {
+                                    "authorizationUrl": "http://auth.example.com/authorize",
+                                    "tokenUrl": "https://auth.example.com/token",
+                                }
+                            }
+                        }
+                    },
+                }
+                card["securityRequirements"] = [{"schemes": {"oauth2": {"list": []}}}]
+                self._send(200, json.dumps(card).encode())
+            elif self.mode == "security-malformed":
+                card = make_valid_card(self._base_url())
+                card["securitySchemes"] = {
+                    "apikey": {"apiKeySecurityScheme": {"description": "no name or location"}},
+                }
+                card["securityRequirements"] = [{"schemes": {"apikey": {"list": []}}}]
+                self._send(200, json.dumps(card).encode())
+            elif self.mode == "security-schemes-not-object":
+                # Malformed card: securitySchemes is a list, not an object.
+                card = make_valid_card(self._base_url())
+                card["securitySchemes"] = ["bearer"]
+                card["securityRequirements"] = [{"schemes": {"bearer": {"list": []}}}]
+                self._send(200, json.dumps(card).encode())
+            elif self.mode == "v0-card-with-security":
+                # Legacy-generation card that also declares a security scheme,
+                # isolating the v1-only SKIP from the no-declaration SKIP.
+                card = {
+                    "name": "Fixture Agent v0",
+                    "description": "Legacy-generation fixture card.",
+                    "version": "0.9.0",
+                    "url": self._base_url(),
+                    "protocolVersion": "0.3",
+                    "skills": [
+                        {"id": "echo", "name": "Echo", "description": "Echoes a short reply."}
+                    ],
+                    "securitySchemes": {
+                        "bearer": {"httpAuthSecurityScheme": {"scheme": "Bearer"}},
+                    },
+                    "securityRequirements": [{"schemes": {"bearer": {"list": []}}}],
+                }
                 self._send(200, json.dumps(card).encode())
             else:
                 self._send(200, json.dumps(make_valid_card(self._base_url())).encode())
