@@ -159,6 +159,30 @@ def _cmd_batch(args: argparse.Namespace) -> int:
     return 0
 
 
+def _report_generated_at(run_files: list[dataset.RunFile]) -> datetime.datetime:
+    """Timestamp the report by its newest input, not by the wall clock.
+
+    ADR-0022 requires the report to be byte-identical for unchanged data,
+    because a cron job commits it and a diff that churns on nothing is
+    noise. A `datetime.now()` here defeated that: re-running the report
+    produced a one-line commit every time, changing only this stamp. Dating
+    it by the data also makes the stamp mean something useful - when the
+    measurement was taken, rather than when the file happened to be
+    rendered.
+    """
+    stamps = [
+        str((rf.footer or {}).get("ended_at") or (rf.header or {}).get("started_at") or "")
+        for rf in run_files
+    ]
+    newest = max((s for s in stamps if s), default="")
+    if newest:
+        try:
+            return datetime.datetime.fromisoformat(newest)
+        except ValueError:
+            pass
+    return datetime.datetime.now(datetime.UTC)
+
+
 def _cmd_report(args: argparse.Namespace) -> int:
     runs_dir = Path(args.runs)
     run_files = [dataset.read_run(p) for p in sorted(runs_dir.glob("run-*.jsonl"))]
@@ -168,7 +192,7 @@ def _cmd_report(args: argparse.Namespace) -> int:
     ecosystem.write_report(
         run_files,
         args.out,
-        generated_at=datetime.datetime.now(datetime.UTC),
+        generated_at=_report_generated_at(run_files),
     )
     print(f"wrote {args.out} from {len(run_files)} run file(s)")
     return 0

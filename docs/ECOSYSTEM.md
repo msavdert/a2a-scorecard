@@ -2,7 +2,7 @@
 
 Aggregate measurement only. No individual operator or target is named anywhere in this report - see ADR-0018. Per-target results remain available in the published dataset for anyone who wants to reproduce these figures or recompute them under a different operator cap.
 
-Generated: 2026-08-23T03:23:47+00:00
+Generated: 2026-08-23T03:14:00+00:00
 
 ## Provenance
 
