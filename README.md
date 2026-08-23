@@ -24,21 +24,27 @@ this exists for.
 
 ## What it found
 
-From a census of 400 endpoints sampled across 396 operators on 2026-08-22
-(`docs/CENSUS-2026-08-22.md`), scoped to the 304 that served a parseable
-Agent Card:
+From the first full run, 2026-08-23: 2,479 endpoints scanned, aggregated
+at two records per operator (so a handful of operators running dozens of
+subdomains each cannot dominate the figures), leaving 2,021 scanned
+records across 1,756 operators. Scoped to the 1,581 that served a
+parseable Agent Card:
 
-- **193 (63%) do not correctly answer a spec-conformant request at the
-  endpoint their own card advertises.** 110 of those return something that
-  is not JSON at all.
-- **6 (2%) serve a signed Agent Card.**
-- **70 (23%) are on the current v1 generation of the spec.**
-- **55 (18%) still serve their card only at the legacy well-known path.**
-- TLS posture, by contrast, is nearly universal: 301 of 304 pass.
+- **989 (63%) do not correctly answer a spec-conformant request at the
+  endpoint their own card advertises.**
+- **25 (1.6%) serve a signed Agent Card.**
+- **441 (28%) are on the current v1 generation of the spec.**
+- **248 (16%) still serve their card only at the legacy well-known path.**
+- TLS posture, by contrast, is nearly universal: 1,573 of 1,581 pass.
 
-Those figures describe agents that serve a fetchable card. Of the full
-400-target sample, 78% were scannable at all - extrapolating to roughly
-1,400 live, publicly scannable A2A endpoints.
+78% of scanned endpoints served a parseable card at all - the same rate
+an independent 400-endpoint census found a day earlier
+(`docs/CENSUS-2026-08-22.md`), as was the 63% figure above. That census
+used a different sample, a smaller one, and a scanner with a defect since
+fixed; the agreement is why these numbers are quoted with any confidence.
+Seven of the non-answering endpoints were also checked by hand with
+`curl`, independently of this scanner: all seven return 404 or 405 HTML to
+a correctly formed JSON-RPC request.
 
 Selection bias runs upward: most candidates came from directories that
 health-check their own listings. And this population is the indie long
@@ -51,8 +57,8 @@ found 50 of 50 agents advertising A2A support failing to answer a
 correctly formatted A2A request. Our 63% is measured differently and on a
 much larger sample, but it points the same way.
 
-`docs/ECOSYSTEM.md` carries the current figures, regenerated from the
-dataset on every run.
+`docs/ECOSYSTEM.md` carries the full figures, every one with its
+denominator, regenerated from the dataset on every run.
 
 ## Quickstart
 
@@ -82,10 +88,12 @@ Two things keep a letter from claiming more than was measured
 (ADR-0017). A grade is **withheld entirely** - reported as `NG`, which is
 not a failing grade - when less than 60% of the rubric applied, or when
 the scanner never got a response out of the agent at all. And the A band
-additionally requires that at least 75% of the rubric applied, because
-otherwise being behind the specification raises your grade: measured on
-the census, 24% of previous-generation agents landed in the A band against
-7% of current-generation ones.
+additionally requires that at least 70% of the rubric applied, because
+otherwise being behind the specification raises your grade: before this
+rule, 24% of previous-generation agents landed in the A band against 7%
+of current-generation ones, purely because an older card skips the
+heaviest card check. In the first run under the rule, every A grade is a
+v1 agent and no v0.x or undetermined card earns one.
 
 Every report says what it was graded on, and the published dataset carries
 the full per-check result, so any grade can be recomputed and argued with.
@@ -96,8 +104,9 @@ Rationale: `docs/adr/0005-check-architecture-and-grading.md` and
 ## What it will not do
 
 `docs/SCANNING-POLICY.md` is binding on the code, not advisory. A scan
-sends fewer than ten requests and at most two benign `SendMessage` pings
-that identify themselves as conformance probes. No exploit payloads, no
+sends fewer than ten requests and at most three message-bearing requests -
+two JSON-RPC pings, or one REST ping instead, plus at most one streaming
+probe - all of which identify themselves as conformance probes. No exploit payloads, no
 prompt injection, no auth bypass, no fuzzing. Auth-gated endpoints are
 recorded as auth-gated and not probed behind the gate. Those limits are
 enforced by tests, not by review.
