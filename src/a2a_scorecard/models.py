@@ -79,6 +79,9 @@ class TargetReport:
     # score or grade.
     applicable_weight: int
     max_weight: int
+    # ADR-0017: set to "coverage" or "unprobed" when `grade` is "NG"
+    # (grading.NG) because a letter was withheld; None for a real letter.
+    grade_withheld: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -89,6 +92,7 @@ class TargetReport:
             "spec_generation": self.spec_generation,
             "score": self.score,
             "grade": self.grade,
+            "grade_withheld": self.grade_withheld,
             "applicable_weight": self.applicable_weight,
             "max_weight": self.max_weight,
             "results": [r.to_dict() for r in self.results],

@@ -8,21 +8,35 @@ PASS or WARN, otherwise it is reported BLOCKED without executing.
 from __future__ import annotations
 
 import abc
-from typing import Any, ClassVar
+from typing import TYPE_CHECKING, Any, ClassVar
 
 import httpx
 
 from a2a_scorecard.config import Settings
 from a2a_scorecard.models import CheckResult, CheckStatus
 
+if TYPE_CHECKING:
+    from a2a_scorecard.transport import HostPacer
+
 
 class ProbeContext:
     """Mutable blackboard shared by all checks of one scan."""
 
-    def __init__(self, base_url: str, client: httpx.Client, settings: Settings) -> None:
+    def __init__(
+        self,
+        base_url: str,
+        client: httpx.Client,
+        settings: Settings,
+        pacer: HostPacer | None = None,
+    ) -> None:
         self.base_url = base_url.rstrip("/")
         self.client = client
         self.settings = settings
+        # The TLS check (C032) never goes through `client` - it opens a raw
+        # socket - so it takes a pacer slot directly to stay under the same
+        # per-host pacing as every other request in the scan (ADR-0020).
+        # None only for direct unit construction that doesn't exercise C032.
+        self.pacer = pacer
         self.card: dict[str, Any] | None = None
         self.card_url: str | None = None
         self.card_raw: str | None = None

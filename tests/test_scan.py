@@ -1,3 +1,5 @@
+import pytest
+
 from a2a_scorecard.config import Settings
 from a2a_scorecard.models import CheckResult, CheckStatus, TargetReport
 from a2a_scorecard.scan import run_scan
@@ -9,7 +11,7 @@ def by_id(report: TargetReport) -> dict[str, CheckResult]:
     return {r.check_id: r for r in report.results}
 
 
-def test_compliant_agent_grades_a(fake_agent) -> None:
+def test_compliant_agent_scores_100_but_grade_held_at_b_by_coverage(fake_agent) -> None:
     report = run_scan(fake_agent("compliant"), SETTINGS)
     results = by_id(report)
     for check_id in ("C001", "C010", "C011", "C012", "C013", "C020", "C021"):
@@ -36,7 +38,21 @@ def test_compliant_agent_grades_a(fake_agent) -> None:
     assert results["C023"].status is CheckStatus.SKIP
     assert report.spec_generation == "v1"
     assert report.score == 100.0
-    assert report.grade == "A"
+    # ADR-0017 rule 3: everything this fixture answered, it answered
+    # perfectly, but four whole check families (C022 streaming, C030
+    # security schemes, C031 signatures, C032 TLS) SKIP because the fixture
+    # is a minimal v1 agent over plain HTTP that declares none of those
+    # optional surfaces. That is exactly the "perfect, minimal v1 agent"
+    # the ADR names: applicable_weight/max_weight = 110/160 = 0.6875, below
+    # the 0.70 A-band floor, so a flawless score is still held to B rather
+    # than A. A perfect score and a held grade is the whole point of the
+    # rule - assert both together so a regression to either the score math
+    # or the coverage gate fails this test.
+    assert report.applicable_weight == 110
+    assert report.max_weight == 160
+    assert report.applicable_weight / report.max_weight == pytest.approx(0.6875)
+    assert report.grade == "B"
+    assert report.grade_withheld is None
 
 
 def test_missing_card_blocks_downstream(fake_agent) -> None:
@@ -45,7 +61,15 @@ def test_missing_card_blocks_downstream(fake_agent) -> None:
     assert results["C010"].status is CheckStatus.FAIL
     for check_id in ("C011", "C012", "C013", "C020", "C021"):
         assert results[check_id].status is CheckStatus.BLOCKED
+    # ADR-0017 rule 2 (corrected): BLOCKED is a conclusion, not an absence
+    # of measurement - C020/C021 being BLOCKED by a missing card is a
+    # finding about the target, so this still earns a real letter (F, since
+    # almost everything downstream of the missing card scored zero) rather
+    # than being withheld as NG. Pin grade_withheld explicitly so a
+    # regression back to excluding BLOCKED (which produced NG here) fails
+    # loudly.
     assert report.grade == "F"
+    assert report.grade_withheld is None
 
 
 def test_unparseable_card_fails_parse_check(fake_agent) -> None:
@@ -81,7 +105,19 @@ def test_grpc_only_card_skips_jsonrpc_probes(fake_agent) -> None:
     assert results["C013"].status is CheckStatus.PASS
     assert results["C020"].status is CheckStatus.SKIP
     assert results["C021"].status is CheckStatus.SKIP
-    assert report.grade == "A"
+    # A card-only agent with no bindings we have a probe for legitimately
+    # SKIPs a large fraction of the rubric (C020/C021/C022/C023 among
+    # others), not just the JSON-RPC checks named above. Measured:
+    # applicable_weight/max_weight = 75/160 = 0.46875, below the 0.60
+    # coverage floor (ADR-0017 rule 1). Rule 1 is checked unconditionally
+    # before rule 2 (graded_result()'s documented precedence), so this
+    # lands on NG for the coverage reason even though it is *also* the
+    # message-handling-never-probed case ADR-0015 predicted - rule 1 wins
+    # the tie, not rule 2.
+    assert report.applicable_weight == 75
+    assert report.max_weight == 160
+    assert report.grade == "NG"
+    assert report.grade_withheld == "coverage"
 
 
 def test_plain_http_warns_reachability(fake_agent) -> None:
@@ -195,7 +231,13 @@ def test_malformed_url_fails_reachability_not_error() -> None:
     report = run_scan("http://[bad", Settings(allow_http=True, timeout_s=0.5))
     results = by_id(report)
     assert results["C001"].status is CheckStatus.FAIL
+    # ADR-0017 rule 2 (corrected): everything downstream of the C001
+    # failure ends BLOCKED, which now counts as a conclusion, so this is a
+    # real F rather than a withheld NG. Assert grade_withheld explicitly so
+    # a regression back to excluding BLOCKED (which reported NG for a dead
+    # target - the exact inversion the ADR amendment fixes) fails loudly.
     assert report.grade == "F"
+    assert report.grade_withheld is None
 
 
 def test_unreachable_target_fails_cleanly() -> None:
@@ -203,7 +245,11 @@ def test_unreachable_target_fails_cleanly() -> None:
     report = run_scan("http://127.0.0.1:9", Settings(allow_http=True, timeout_s=0.5))
     results = by_id(report)
     assert results["C001"].status is CheckStatus.FAIL
+    # Same ADR-0017 rule 2 reasoning as the malformed-URL case above: a
+    # refused connection is the most conclusive measurement this scanner
+    # can make, so it earns a real F, not a withheld NG.
     assert report.grade == "F"
+    assert report.grade_withheld is None
 
 
 def test_v0x_card_skips_security_check(fake_agent) -> None:

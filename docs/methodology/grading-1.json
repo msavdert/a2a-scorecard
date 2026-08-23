@@ -1,0 +1,54 @@
+{
+  "grading_version": "1",
+  "digest": "sha256:f92d433a0b3f9021e5f4ccf20e1b3d40f08f79a85f4de5edceb3c5b7b1a3e2e5",
+  "manifest": [
+    {
+      "check_id": "C001",
+      "weight": 10
+    },
+    {
+      "check_id": "C010",
+      "weight": 20
+    },
+    {
+      "check_id": "C011",
+      "weight": 10
+    },
+    {
+      "check_id": "C012",
+      "weight": 20
+    },
+    {
+      "check_id": "C013",
+      "weight": 15
+    },
+    {
+      "check_id": "C020",
+      "weight": 25
+    },
+    {
+      "check_id": "C021",
+      "weight": 10
+    },
+    {
+      "check_id": "C022",
+      "weight": 10
+    },
+    {
+      "check_id": "C023",
+      "weight": 10
+    },
+    {
+      "check_id": "C030",
+      "weight": 10
+    },
+    {
+      "check_id": "C031",
+      "weight": 10
+    },
+    {
+      "check_id": "C032",
+      "weight": 10
+    }
+  ]
+}

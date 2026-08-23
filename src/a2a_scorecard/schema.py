@@ -22,6 +22,11 @@ from referencing.exceptions import NoSuchResource
 
 SCHEMA_RESOURCE = "a2a-v1.0.1.json"
 
+# Single source of truth for the vendored spec version stamped on dataset
+# records (ADR-0021). Must agree with SCHEMA_RESOURCE's filename and with
+# vendor/PROVENANCE.md; see tests/test_methodology.py for the guard.
+SPEC_VERSION = "v1.0.1"
+
 
 @cache
 def bundle() -> dict[str, Any]:

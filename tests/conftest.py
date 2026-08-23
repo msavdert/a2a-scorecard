@@ -4,9 +4,12 @@ every HTTP request in the suite lands on this server on 127.0.0.1."""
 from __future__ import annotations
 
 import base64
+import datetime
 import json
+import threading
 import time
 from collections.abc import Callable
+from email.utils import format_datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from threading import Thread
 from typing import Any
@@ -14,6 +17,12 @@ from typing import Any
 import pytest
 
 METHOD_NOT_FOUND = -32601
+
+# Modes whose 429 fires exactly once (on the first matching request), then
+# behave normally: distinct from "throttle-always", which never stops.
+_THROTTLE_ONCE_MODES = frozenset(
+    {"throttle-once", "throttle-http-date", "throttle-garbage", "throttle-huge"}
+)
 
 
 def _b64url(obj: dict[str, Any]) -> str:
@@ -65,7 +74,10 @@ class FakeAgentHandler(BaseHTTPRequestHandler):
     # streaming-rejected, streaming-stalls, streaming-garbled,
     # streaming-trickle, streaming-multiline, streaming-no-newline,
     # streaming-oversized, legacy-streaming-drift, rest-only-ok,
-    # rest-only-drift, rest-only-rejected, rest-only-auth-gated.
+    # rest-only-drift, rest-only-rejected, rest-only-auth-gated,
+    # throttle-once, throttle-always, throttle-post, throttle-http-date,
+    # throttle-garbage, throttle-huge, barrier, cross-host-interface,
+    # redirect-loop, slow (ADR-0020).
     mode = "compliant"
 
     def log_message(self, format: str, *args: Any) -> None:  # noqa: A002
@@ -75,14 +87,93 @@ class FakeAgentHandler(BaseHTTPRequestHandler):
         host, port = self.server.server_address[:2]
         return f"http://{host}:{port}"
 
+    def _journal(self) -> None:
+        # Recorded BEFORE any response bytes go out (called from `_send` /
+        # `_send_throttled` / the streaming and redirect-loop paths just
+        # ahead of `send_response`), never after: appending post-send would
+        # race the client, which can observe a complete response - and act
+        # on it, e.g. raising `Throttled` - before this handler thread gets
+        # scheduled again to record it (ADR-0020). `self._req_start` is set
+        # at the top of do_GET/do_POST, so the interval still spans this
+        # request's own handling time even though "end" is really
+        # "about to send" rather than "fully sent".
+        end = time.monotonic()
+        entry = (self._req_start, end, self.command, self.path, self.headers.get("User-Agent", ""))
+        with self.server.journal_lock:  # type: ignore[attr-defined]
+            self.server.journal.append(entry)  # type: ignore[attr-defined]
+
     def _send(self, status: int, body: bytes, content_type: str = "application/json") -> None:
+        self._journal()
         self.send_response(status)
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
 
+    def _send_throttled(self, retry_after: object) -> None:
+        self._journal()
+        body = b'{"error": "throttled"}'
+        self.send_response(429)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Retry-After", str(retry_after))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _throttle_get(self) -> bool:
+        """Send a 429 in place of the normal GET handling and return True,
+        or return False to let the caller handle the request normally."""
+        if self.mode == "throttle-always":
+            self._send_throttled(1)
+            return True
+        if self.mode in _THROTTLE_ONCE_MODES:
+            with self.server.throttle_guard:  # type: ignore[attr-defined]
+                if self.server.throttle_fired:  # type: ignore[attr-defined]
+                    return False
+                self.server.throttle_fired = True  # type: ignore[attr-defined]
+            if self.mode == "throttle-once":
+                self._send_throttled(1)
+            elif self.mode == "throttle-http-date":
+                retry_at = datetime.datetime.now(datetime.UTC) + datetime.timedelta(seconds=1)
+                self._send_throttled(format_datetime(retry_at))
+            elif self.mode == "throttle-garbage":
+                self._send_throttled("soon")
+            elif self.mode == "throttle-huge":
+                self._send_throttled(86400)
+            return True
+        return False
+
     def do_GET(self) -> None:  # noqa: N802 - http.server API
+        self._req_start = time.monotonic()
+        if self.mode == "slow":
+            # A small, deliberate per-request delay so overlap-detection
+            # tests (ADR-0020: "no two intervals on the same netloc
+            # overlap") have real duration to work with, rather than
+            # near-instant local requests that would "pass" even if
+            # serialization were silently broken.
+            time.sleep(0.05)
+        if self.mode == "redirect-loop":
+            # Every GET redirects back to the same path: a client that
+            # doesn't cap redirects (or that caps them above the request
+            # budget) never reaches a terminal response.
+            self._journal()
+            self.send_response(302)
+            self.send_header("Location", self.path or "/")
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
+        if self.mode == "barrier" and self.path == "/" and hasattr(self.server, "barrier"):
+            # Blocks until a second party (another fake agent's handler)
+            # reaches the same barrier, or times out. Used to prove two
+            # scans ran concurrently: if a runner serialized them, the
+            # second party never arrives and this call times out. Only the
+            # first request of a scan (C001's GET to "/") waits, not every
+            # GET - a cyclic barrier re-synchronizing on every request would
+            # need every later request from both scans to stay in lockstep,
+            # which is not what this mode exists to prove.
+            self.server.barrier.wait(timeout=self.server.barrier_timeout)  # type: ignore[attr-defined]
+        if self._throttle_get():
+            return
         if self.path in ("/.well-known/agent-card.json", "/.well-known/agent.json"):
             if self.mode == "no-card":
                 self._send(404, b"not found", "text/plain")
@@ -325,12 +416,31 @@ class FakeAgentHandler(BaseHTTPRequestHandler):
                 "rest-only-auth-gated",
             ):
                 self._send(200, json.dumps(make_rest_only_card(self._base_url())).encode())
+            elif self.mode == "cross-host-interface":
+                # Card declares its JSON-RPC interface at a SECOND fixture
+                # server's URL, not this one - proves the pacer keys on the
+                # host of the request actually issued, not the target host
+                # (ADR-0020). The test sets `server.second_server_url`
+                # before scanning.
+                other = getattr(self.server, "second_server_url", self._base_url())
+                self._send(200, json.dumps(make_valid_card(other)).encode())
             else:
                 self._send(200, json.dumps(make_valid_card(self._base_url())).encode())
         else:
             self._send(200, b"ok", "text/plain")
 
     def do_POST(self) -> None:  # noqa: N802 - http.server API
+        self._req_start = time.monotonic()
+        if self.mode == "slow":
+            time.sleep(0.05)
+        if self.mode == "throttle-post":
+            # Drain the request body before answering, like every other
+            # branch below: an unread body on a keep-alive connection
+            # desyncs the next request's framing.
+            length = int(self.headers.get("Content-Length", "0"))
+            self.rfile.read(length)
+            self._send_throttled(1)
+            return
         if self.mode == "card-only":
             self._send(404, b"not found", "text/plain")
             return
@@ -352,6 +462,13 @@ class FakeAgentHandler(BaseHTTPRequestHandler):
             return
         rpc_id = req.get("id")
         method = req.get("method")
+        if method in ("SendMessage", "message/send"):
+            # Raw request count for the v1-SendMessage-plus-legacy-retry
+            # pair (docs/SCANNING-POLICY.md): 0, 1 (v1 answered directly),
+            # or 2 (v1 rejected with method-not-found, legacy retried).
+            self.server.jsonrpc_ping_count = (  # type: ignore[attr-defined]
+                getattr(self.server, "jsonrpc_ping_count", 0) + 1
+            )
         if method == "SendStreamingMessage":
             self.server.streaming_request_count = (  # type: ignore[attr-defined]
                 getattr(self.server, "streaming_request_count", 0) + 1
@@ -460,6 +577,7 @@ class FakeAgentHandler(BaseHTTPRequestHandler):
             self._send(200, json.dumps(body).encode())
             return
 
+        self._journal()
         self.send_response(200)
         self.send_header("Content-Type", "text/event-stream")
         self.send_header("Cache-Control", "no-cache")
@@ -555,14 +673,23 @@ def fake_agent() -> Any:
     servers: list[ThreadingHTTPServer] = []
     by_url: dict[str, ThreadingHTTPServer] = {}
 
-    def make(mode: str = "compliant") -> str:
+    def make(mode: str = "compliant", host: str = "127.0.0.1") -> str:
+        # `host` defaults to the loopback address every other test uses, but
+        # a caller can pick a distinct address in 127.0.0.0/8 (all of it is
+        # loopback on Linux) so that URL string-sort order is deterministic
+        # across servers regardless of the OS-assigned ephemeral port
+        # (ADR-0020 batch-ordering tests need this).
         handler = type("Handler", (FakeAgentHandler,), {"mode": mode})
-        server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
+        server = ThreadingHTTPServer((host, 0), handler)
         server.streaming_request_count = 0  # type: ignore[attr-defined]
         server.message_send_request_count = 0  # type: ignore[attr-defined]
+        server.journal = []  # type: ignore[attr-defined]
+        server.journal_lock = threading.Lock()  # type: ignore[attr-defined]
+        server.throttle_fired = False  # type: ignore[attr-defined]
+        server.throttle_guard = threading.Lock()  # type: ignore[attr-defined]
         Thread(target=server.serve_forever, daemon=True).start()
         servers.append(server)
-        url = f"http://127.0.0.1:{server.server_address[1]}"
+        url = f"http://{host}:{server.server_address[1]}"
         by_url[url] = server
         return url
 
@@ -574,8 +701,30 @@ def fake_agent() -> Any:
         """Number of POST /message:send requests the server at `url` saw."""
         return int(by_url[url].message_send_request_count)  # type: ignore[attr-defined]
 
+    def jsonrpc_ping_count(url: str) -> int:
+        """Number of POST SendMessage/message-send requests the server at
+        `url` saw: 0, 1 (v1 answered directly), or 2 (v1 rejected with
+        method-not-found, then the single legacy retry - ADR-0020)."""
+        return int(getattr(by_url[url], "jsonrpc_ping_count", 0))
+
+    def journal(url: str) -> list[tuple[float, float, str, str, str]]:
+        """Snapshot of (start, end, method, path, user_agent) tuples for
+        every request the server at `url` has served so far (ADR-0020)."""
+        server = by_url[url]
+        with server.journal_lock:  # type: ignore[attr-defined]
+            return list(server.journal)  # type: ignore[attr-defined]
+
+    def server_for(url: str) -> ThreadingHTTPServer:
+        """The raw `ThreadingHTTPServer` behind `url`, for tests that need
+        to attach a shared `threading.Barrier` or a `second_server_url`
+        before scanning (ADR-0020)."""
+        return by_url[url]
+
     make.streaming_request_count = streaming_request_count  # type: ignore[attr-defined]
     make.message_send_request_count = message_send_request_count  # type: ignore[attr-defined]
+    make.jsonrpc_ping_count = jsonrpc_ping_count  # type: ignore[attr-defined]
+    make.journal = journal  # type: ignore[attr-defined]
+    make.server_for = server_for  # type: ignore[attr-defined]
     yield make
     for server in servers:
         server.shutdown()

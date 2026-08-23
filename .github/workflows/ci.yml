@@ -3,6 +3,12 @@ name: ci
 on:
   push:
     branches: [main]
+    # The monthly scan bot commits data and a regenerated report; a JSONL
+    # append does not need a full test matrix (ADR-0022).
+    paths-ignore:
+      - "data/runs/**"
+      - "data/index.json"
+      - "docs/ECOSYSTEM.md"
   pull_request:
 
 jobs:

@@ -33,3 +33,11 @@ def test_grading_version_is_frozen_at_one_pre_launch() -> None:
     # ADR-0011: stays "1" until the first public dataset freezes the
     # methodology; bumping it before then is a mistake, not a release.
     assert grading.GRADING_VERSION == "1"
+
+
+def test_report_carries_grade_withheld_field(fake_agent: Any) -> None:
+    # ADR-0017: TargetReport.to_dict() must always carry grade_withheld,
+    # even when no letter was withheld, so the dataset schema is uniform
+    # from its first record.
+    report = run_scan(fake_agent("compliant"), SETTINGS)
+    assert "grade_withheld" in report.to_dict()

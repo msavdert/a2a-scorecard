@@ -18,6 +18,7 @@ from __future__ import annotations
 import socket
 import ssl
 import time
+from contextlib import nullcontext
 from dataclasses import dataclass
 from urllib.parse import urlsplit
 
@@ -107,7 +108,13 @@ class TlsPosture(Check):
                 evidence="could not determine hostname from target URL",
             )
 
-        probe = _tls_handshake(host, port, ctx.settings.timeout_s)
+        # This handshake is a raw socket, never passing through ctx.client,
+        # so it takes a pacer slot directly to observe the same per-host
+        # pacing as every httpx request in the scan (ADR-0020). ctx.pacer
+        # is only None for direct unit construction of a ProbeContext.
+        slot = ctx.pacer.slot(host) if ctx.pacer is not None else nullcontext()
+        with slot:
+            probe = _tls_handshake(host, port, ctx.settings.timeout_s)
         details = {
             "version": probe.version,
             "cipher": probe.cipher,

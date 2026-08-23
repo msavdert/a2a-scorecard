@@ -1,0 +1,86 @@
+name: scan
+
+# Unattended monthly operation (ADR-0022). Scans the whole target list,
+# appends one run file to the dataset, regenerates the aggregate report,
+# and commits. Nobody is watching this run, so every policy line that a
+# machine can check before the first request is checked before the first
+# request.
+
+on:
+  schedule:
+    # 03:17 UTC on the 1st of each month. Off the hour on purpose: the top
+    # of the hour is when everyone else's crons fire.
+    - cron: "17 3 1 * *"
+  workflow_dispatch:
+    inputs:
+      resume:
+        description: "Resume the newest incomplete run instead of starting a new one"
+        type: boolean
+        default: true
+
+# Never two runs at once: the second would scan targets the first is
+# already scanning, and both would commit to the same branch.
+concurrency:
+  group: scan
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    # A full run is roughly 35-40 minutes, bounded below by the largest
+    # operator group, which is walked sequentially. This is a backstop for
+    # a hang, not a target.
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.12"
+
+      - run: uv sync
+
+      # The scanning policy requires a working contact path in the
+      # User-Agent. The census sent 400 requests advertising a URL that
+      # 404'd because nothing checked. `batch` runs this preflight itself
+      # and refuses to send anything if it fails; this step surfaces the
+      # failure early and legibly rather than inside a scan log.
+      - name: Preflight - User-Agent contact path resolves
+        run: uv run a2a-scorecard preflight
+
+      - name: Scan
+        run: |
+          uv run a2a-scorecard batch \
+            --targets data/targets.jsonl \
+            --exclusions data/exclusions.jsonl \
+            --out data/runs \
+            ${{ (github.event_name == 'schedule' || inputs.resume) && '--resume-latest' || '' }}
+
+      # Regenerated from the committed dataset alone, so the report can
+      # always be rebuilt from what is in the repository.
+      - name: Regenerate the aggregate report
+        if: always()
+        run: uv run a2a-scorecard report --runs data/runs --out docs/ECOSYSTEM.md
+
+      # `if: always()` so a crashed or timed-out run still commits its
+      # partial, resumable run file. A footerless file is the signal that
+      # the next dispatch should resume it; losing it would mean
+      # re-scanning everything.
+      - name: Commit results
+        if: always()
+        run: |
+          git config user.name "a2a-scorecard bot"
+          git config user.email "noreply@github.com"
+          git add data/runs data/index.json docs/ECOSYSTEM.md
+          if git diff --cached --quiet; then
+            echo "nothing to commit"
+            exit 0
+          fi
+          git commit -m "Monthly scan: $(date -u +%Y-%m-%d)
+
+          Automated run (ADR-0022). Dataset and aggregate report
+          regenerated from the committed target list."
+          git push

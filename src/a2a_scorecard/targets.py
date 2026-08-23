@@ -290,6 +290,26 @@ def _excluded_by(target: Target, exclusion: Exclusion) -> bool:
     return False  # pragma: no cover - scope is validated at load time
 
 
+def is_excluded(url: str, exclusions: list[Exclusion]) -> bool:
+    """Whether a bare URL is covered by `exclusions`.
+
+    The single-URL scan path needs this: it has a URL and no target-list
+    entry, and fabricating a `Target` with invented provenance just to run
+    the match would defeat ADR-0019's whole point.
+    """
+    target_id = normalize_target(url)
+    host = urlsplit(target_id).hostname or ""
+    for exclusion in exclusions:
+        pattern = exclusion.pattern.lower()
+        if exclusion.scope == "url" and target_id == normalize_target(exclusion.pattern):
+            return True
+        if exclusion.scope == "host" and host == pattern:
+            return True
+        if exclusion.scope == "domain" and _domain_matches(host, pattern):
+            return True
+    return False
+
+
 def apply_exclusions(
     targets: list[Target], exclusions: list[Exclusion]
 ) -> tuple[list[Target], list[Target]]:
