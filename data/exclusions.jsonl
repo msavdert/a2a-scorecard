@@ -1,0 +1,30 @@
+# data/exclusions.jsonl - permanent scan opt-outs (ADR-0019).
+#
+# One JSON object per line. Blank lines and lines starting with "#" are
+# skipped by the loader (src/a2a_scorecard/targets.py:load_exclusions).
+#
+# Fields:
+#   pattern         (required) the value matched against a target's
+#                    normalized host or URL, depending on scope.
+#   scope           (required) one of:
+#                      "url"    - matches one normalized target exactly.
+#                      "host"   - matches one exact host.
+#                      "domain" - matches that host and all its
+#                                 subdomains. This is the default an
+#                                 owner request should use: asking to be
+#                                 removed means their whole estate, not
+#                                 the one hostname we happened to list.
+#   reason          why the entry was excluded.
+#   requested_by    who asked, e.g. "github:@someuser".
+#   issue           link to the GitHub issue recording the request.
+#   effective_from  date the exclusion starts applying.
+#   permanent       true unless a future ADR changes this policy; opt-outs
+#                    are honored permanently per docs/SCANNING-POLICY.md.
+#
+# Example (not a real entry):
+#   {"pattern": "example.com", "scope": "domain",
+#    "reason": "owner request", "requested_by": "github:@someuser",
+#    "issue": "https://github.com/msavdert/a2a-scorecard/issues/42",
+#    "effective_from": "2026-09-01", "permanent": true}
+#
+# This file starts empty: no exclusion requests have been received yet.

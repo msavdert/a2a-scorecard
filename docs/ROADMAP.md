@@ -32,7 +32,7 @@ above is exercised by at least one test.
 
 ## v0.3 - Batch scanning and the dataset
 
-- Target list format (YAML) with provenance for every listed endpoint.
+- Target list format (JSONL, ADR-0019) with provenance for every listed endpoint.
 - Batch runner honoring the scanning policy (per-host serialization, 429).
 - Persistent JSON dataset of scan results (append-only, one file per run).
   The dataset is the project's primary long-term product (ADR-0011):
