@@ -152,6 +152,20 @@ def parse_retry_after(value: str | None, *, default_s: float) -> float:
     return delta
 
 
+def _default_host_key(value: Any) -> str:
+    """Pacing key for a request or a bare hostname.
+
+    Accepts both because two code paths take pacer slots: every httpx
+    request passes an `httpx.URL`, and the TLS check's raw socket passes
+    the hostname as a plain string. Both must map to the SAME key or the
+    two paths pace independently and a target can be hit twice at once -
+    which is the per-host serialisation the policy requires. Keying an
+    `httpx.URL` on `.host` yields exactly the string the TLS check passes.
+    """
+    host = getattr(value, "host", None)
+    return host if isinstance(host, str) else str(value)
+
+
 class ScanTransport(httpx.BaseTransport):
     """Wraps an inner `httpx.BaseTransport` (real network I/O by default)
     with the policy's request budget, wall-clock deadline, per-host pacing,
@@ -174,7 +188,7 @@ class ScanTransport(httpx.BaseTransport):
     ) -> None:
         self._inner = inner or httpx.HTTPTransport()
         self.limits = limits or ScanLimits()
-        self._host_key = host_key or (lambda url: url.host)
+        self._host_key = host_key or _default_host_key
         self._clock = clock
         self._sleep = sleep
         self.pacer = pacer or HostPacer(
@@ -213,7 +227,7 @@ class ScanTransport(httpx.BaseTransport):
         if request.method.upper() != "GET":
             # Load-bearing rule (ADR-0020): retrying a POST would spend a
             # second SendMessage ping, and the policy bounds a scan to at
-            # most two message pings total. A retry policy that quietly
+            # most two JSON-RPC pings. A retry policy that quietly
             # doubles the pings is a policy violation implemented as a
             # feature, so any non-GET 429 aborts immediately.
             response.close()

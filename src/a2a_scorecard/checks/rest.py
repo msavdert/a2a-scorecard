@@ -2,9 +2,10 @@
 
 At most one benign `POST {interface url}/message:send` per scan, sent only to
 targets whose card declares an HTTP+JSON `supportedInterfaces` entry and only
-when the JSON-RPC pings were not applicable (C020's outcome is SKIP), so a
-scan never sends more than two message pings in total
-(docs/SCANNING-POLICY.md).
+when the JSON-RPC pings were not applicable (C020's outcome is SKIP).
+JSON-RPC and REST pings are mutually exclusive, so a scan sends at most
+three message-bearing requests in total (ADR-0023,
+docs/SCANNING-POLICY.md).
 """
 
 from __future__ import annotations
@@ -16,6 +17,7 @@ import httpx
 from a2a_scorecard.checks.base import Check, ProbeContext
 from a2a_scorecard.checks.protocol import _result_looks_valid, _v1_ping_params
 from a2a_scorecard.models import CheckResult, CheckStatus
+from a2a_scorecard.transport import ScanAborted
 
 PATH = "/message:send"
 
@@ -63,12 +65,20 @@ class RestBindingProbe(Check):
             return self.result(
                 CheckStatus.SKIP,
                 evidence="JSON-RPC probe was applicable and already sent a message ping; "
-                "the two-ping-per-scan budget forbids a second binding's ping "
+                "JSON-RPC and REST pings are mutually exclusive, so a second "
+                "binding is not probed "
                 "(docs/SCANNING-POLICY.md)",
             )
 
         try:
             return self._probe(ctx, endpoint)
+        except ScanAborted:
+            # A budget, deadline or 429 abort is not a finding about the
+            # target and must reach scan.py, which re-raises it so the whole
+            # scan is recorded as an absence rather than graded (ADR-0020).
+            # The catch-all below would otherwise turn it into a scored FAIL
+            # and write a lie into the permanent dataset.
+            raise
         except Exception as exc:  # noqa: BLE001 - never let a probe crash the scan
             return self.result(
                 CheckStatus.FAIL,

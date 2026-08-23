@@ -11,6 +11,7 @@ from __future__ import annotations
 import datetime
 from email.utils import format_datetime
 
+import httpx
 import pytest
 
 from a2a_scorecard.config import Settings
@@ -21,6 +22,7 @@ from a2a_scorecard.transport import (
     ScanLimits,
     ScanTransport,
     Throttled,
+    _default_host_key,
     parse_retry_after,
 )
 
@@ -102,6 +104,49 @@ def test_pacer_key_callable_is_applied() -> None:
     with pacer.slot("HOST-A"):
         pass
     with pacer.slot("host-a"):  # same key once lowercased
+        pass
+
+    assert sleeps == [pytest.approx(0.5)]
+
+
+# --- _default_host_key: httpx.URL and bare hostname must key identically ----------
+#
+# Regression coverage for the bug fixed by adding a module-level
+# `_default_host_key` (ADR-0020): the default key function used to be
+# `lambda url: url.host`, which raised AttributeError when called with a
+# plain hostname string (as the TLS check's raw-socket pacer slot does),
+# because `str` has no `.host` attribute. That crash was caught by scan.py's
+# blanket `except Exception` and scored as ERROR on every HTTPS target - see
+# tests/test_tls.py for the check-level regression test. This test covers
+# the load-bearing property directly: an httpx.URL and the bare hostname
+# string it carries must produce the SAME pacing key, or the raw TLS
+# handshake and the httpx requests to the same host would pace
+# independently instead of serializing together.
+
+
+def test_default_host_key_matches_for_url_and_bare_hostname() -> None:
+    url = httpx.URL("https://example.invalid:8443/path")
+    assert _default_host_key(url) == "example.invalid"
+    assert _default_host_key("example.invalid") == _default_host_key(url)
+
+
+def test_default_host_key_accepts_bare_hostname_without_raising() -> None:
+    # Before the fix, this raised AttributeError: 'str' object has no
+    # attribute 'host'.
+    assert _default_host_key("example.invalid") == "example.invalid"
+
+
+def test_host_pacer_with_default_key_serializes_url_and_bare_hostname() -> None:
+    """The same property, exercised through `HostPacer` built the way
+    `ScanTransport` builds its default one, rather than calling
+    `_default_host_key` directly."""
+    clock = FakeClock()
+    sleeps: list[float] = []
+    pacer = HostPacer(0.5, key=_default_host_key, clock=clock, sleep=recording_sleep(clock, sleeps))
+
+    with pacer.slot(httpx.URL("https://example.invalid/")):
+        pass
+    with pacer.slot("example.invalid"):  # same key: must wait out the pace
         pass
 
     assert sleeps == [pytest.approx(0.5)]

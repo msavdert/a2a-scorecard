@@ -13,6 +13,7 @@ from a2a_scorecard.checks.base import ProbeContext
 from a2a_scorecard.checks.tls import TlsHandshakeResult, TlsPosture
 from a2a_scorecard.config import Settings
 from a2a_scorecard.models import CheckStatus
+from a2a_scorecard.transport import HostPacer, ScanTransport
 
 
 def _ctx(base_url: str) -> ProbeContext:
@@ -104,6 +105,49 @@ def test_healthy_certificate_passes(monkeypatch) -> None:
         "cipher": "TLS_AES_256_GCM_SHA384",
         "days_to_expiry": 90,
     }
+
+
+# --- Real pacer branch: regression for the AttributeError crash on every ----------
+# --- HTTPS target (ADR-0020) -------------------------------------------------------
+#
+# Every test above builds `ProbeContext` with `pacer=None` (the default),
+# which takes the `nullcontext()` shortcut in TlsPosture.run and so never
+# exercises `ctx.pacer.slot(host)` at all. That is exactly how the original
+# bug hid from this whole file: production always supplies a real pacer
+# (scan.py passes `scan_transport.pacer`), and that pacer's default key
+# function used to be `lambda url: url.host`, which raised AttributeError
+# when called with the bare hostname string this check passes - the fake
+# agent is HTTP-only, so C032 always SKIPs there too, meaning nothing in the
+# existing suite ever called `_tls_handshake` behind a real pacer. This test
+# builds a `HostPacer` the same way `ScanTransport` builds its default one
+# (see transport.py's `ScanTransport.__init__`) and drives an https target
+# through it.
+
+
+def test_run_with_real_pacer_does_not_raise_and_takes_a_slot(monkeypatch) -> None:
+    def _fake_handshake(host: str, port: int, timeout_s: float) -> TlsHandshakeResult:
+        return TlsHandshakeResult(
+            version="TLSv1.3", cipher="TLS_AES_256_GCM_SHA384", days_to_expiry=90
+        )
+
+    monkeypatch.setattr(tls_module, "_tls_handshake", _fake_handshake)
+
+    # Built the same way ScanTransport.__init__ builds its default pacer:
+    # HostPacer(pace_per_host_s, key=_default_host_key, ...). Constructing it
+    # via a real ScanTransport (rather than importing _default_host_key
+    # directly) is deliberate: it proves this test tracks whatever key
+    # function production actually wires up, not a copy of it.
+    pacer = ScanTransport(sleep=lambda s: None).pacer
+    assert isinstance(pacer, HostPacer)
+
+    ctx = ProbeContext("https://example.invalid", httpx.Client(), Settings(), pacer=pacer)
+    result = TlsPosture().run(ctx)  # must not raise AttributeError
+
+    assert result.status is CheckStatus.PASS
+    # Proves the real-pacer branch actually ran (not the nullcontext()
+    # shortcut): a slot was taken for this host, so HostPacer now has a
+    # recorded next-allowed time for it.
+    assert "example.invalid" in pacer._next_allowed  # noqa: SLF001
 
 
 def test_probe_called_at_most_once(monkeypatch) -> None:

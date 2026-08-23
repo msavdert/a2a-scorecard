@@ -227,8 +227,46 @@ def test_batch_applies_exclusions(tmp_path: Path, fake_agent, stub_preflight_ok,
         ]
     )
     assert exit_code == 0
-    assert "2 attempted, 1 excluded" in capsys.readouterr().out
+    out = capsys.readouterr().out
+    assert "3 submitted" in out
+    assert "excluded" in out
     assert fake_agent.journal(excluded_url) == []
+
+    # Regression coverage for the cli.py fix (ADR-0019/0020): before it,
+    # cli.py filtered exclusions itself and passed the already-filtered
+    # target list to run_batch with BatchConfig.exclusions left empty, so
+    # run_batch's own `excluded` outcome emission never fired - the target
+    # was correctly not scanned, but no `excluded` row was written to the
+    # dataset, leaving the opt-out with no audit trail. The fix passes ALL
+    # targets plus BatchConfig(exclusions=...) so run_batch records the
+    # exclusion itself.
+    run_files = sorted(out_dir.glob("run-*.jsonl"))
+    assert len(run_files) == 1
+    run = dataset.read_run(run_files[0])
+    excluded_target_id = normalize_target(excluded_url)
+    rows_by_target = {row["target_id"]: row for row in run.targets}
+    assert excluded_target_id in rows_by_target
+    excluded_row = rows_by_target[excluded_target_id]
+    assert excluded_row["outcome"] == "excluded"
+    assert excluded_row["report"] is None
+
+    # The excluded target still appears in the report's excluded/absence
+    # bucket, not silently dropped and not counted as a failure.
+    ok_target_ids = {
+        row["target_id"] for row in run.targets if row["target_id"] != excluded_target_id
+    }
+    assert len(ok_target_ids) == 2
+    outcomes_by_target = {row["target_id"]: row["outcome"] for row in run.targets}
+    assert outcomes_by_target[excluded_target_id] == "excluded"
+    assert all(outcomes_by_target[tid] == "ok" for tid in ok_target_ids)
+
+    # And the excluded target shows up in the generated report's excluded
+    # bucket, counted as an absence rather than omitted or counted as a
+    # failure.
+    report_path = tmp_path / "ECOSYSTEM.md"
+    assert main(["report", "--runs", str(out_dir), "--out", str(report_path)]) == 0
+    report_text = report_path.read_text(encoding="utf-8")
+    assert "`excluded`: 1/3" in report_text
 
 
 def test_scan_refuses_excluded_url(tmp_path: Path, fake_agent, capsys) -> None:

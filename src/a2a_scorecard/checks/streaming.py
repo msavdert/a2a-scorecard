@@ -18,6 +18,7 @@ import httpx
 from a2a_scorecard.checks.base import Check, ProbeContext
 from a2a_scorecard.checks.protocol import _v1_ping_params
 from a2a_scorecard.models import CheckResult, CheckStatus
+from a2a_scorecard.transport import ScanAborted
 
 METHOD = "SendStreamingMessage"
 
@@ -100,6 +101,13 @@ class StreamingProbe(Check):
 
         try:
             return self._probe(ctx, endpoint)
+        except ScanAborted:
+            # A budget, deadline or 429 abort is not a finding about the
+            # target and must reach scan.py, which re-raises it so the whole
+            # scan is recorded as an absence rather than graded (ADR-0020).
+            # The catch-all below would otherwise turn it into a scored FAIL
+            # and write a lie into the permanent dataset.
+            raise
         except Exception as exc:  # noqa: BLE001 - never let a probe crash the scan
             return self.result(
                 CheckStatus.FAIL,

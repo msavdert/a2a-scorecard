@@ -21,7 +21,7 @@ from a2a_scorecard.config import Settings
 from a2a_scorecard.dataset import RunWriter, rebuild_index
 from a2a_scorecard.models import TargetReport
 from a2a_scorecard.scan import run_scan
-from a2a_scorecard.targets import apply_exclusions, is_excluded, load_exclusions, load_targets
+from a2a_scorecard.targets import is_excluded, load_exclusions, load_targets
 
 
 def _render_text(report: TargetReport) -> str:
@@ -107,7 +107,6 @@ def _cmd_batch(args: argparse.Namespace) -> int:
 
     exclusions = load_exclusions(args.exclusions) if Path(args.exclusions).exists() else []
     targets = load_targets(args.targets)
-    kept, excluded = apply_exclusions(targets, exclusions)
 
     out_dir = Path(args.out)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -117,13 +116,21 @@ def _cmd_batch(args: argparse.Namespace) -> int:
         stamp = last_scanned.get(target_id)
         return _iso_to_epoch(stamp) if stamp else None
 
+    submitted = targets
     run_path, resuming = _pick_run_path(out_dir, args.resume_latest)
     if resuming:
         done = dataset.completed_targets(run_path)
-        kept = [t for t in kept if t.target_id not in done]
+        submitted = [t for t in targets if t.target_id not in done]
         print(f"resuming {run_path.name}: {len(done)} targets already recorded", file=sys.stderr)
 
-    config = BatchConfig(concurrency=args.workers)
+    # Exclusions go to run_batch rather than being filtered out here, so an
+    # excluded target still gets an `excluded` record in the dataset. The
+    # opt-out then has an audit trail: "we did not scan this, and here is
+    # the row that says so" (ADR-0019, ADR-0020's outcome taxonomy).
+    # Filtering here instead would keep the target safe but make the
+    # exclusion invisible in the dataset and permanently zero in the
+    # report's excluded bucket.
+    config = BatchConfig(concurrency=args.workers, exclusions=exclusions)
     with RunWriter(
         run_path,
         targets=targets,
@@ -133,13 +140,13 @@ def _cmd_batch(args: argparse.Namespace) -> int:
         config=config,
         resume=resuming,
     ) as writer:
-        summary = run_batch(kept, writer, config=config, already_done=already_done)
+        summary = run_batch(submitted, writer, config=config, already_done=already_done)
 
     index_path = out_dir.parent / "index.json"
     index_path.write_text(json.dumps(rebuild_index(out_dir), indent=2, sort_keys=True) + "\n")
 
     print(f"run:      {run_path}")
-    print(f"targets:  {len(kept)} attempted, {len(excluded)} excluded")
+    print(f"targets:  {len(submitted)} submitted")
     for outcome, count in sorted(summary.outcomes.items(), key=lambda kv: kv[0].value):
         print(f"  {outcome.value:24} {count}")
     return 0
