@@ -51,13 +51,16 @@ Changes to this policy require an ADR and the owner's explicit approval.
   one bare TLS handshake. At most one of the message pings may be a
   streaming request.
 - Batch scanning serializes requests per host and honors HTTP 429 and
-  Retry-After. Re-scan frequency for the public scorecard: at most daily
-  per target.
+  Retry-After. Re-scan frequency: at most daily per target. The automated
+  run is configured monthly, well inside that limit (ADR-0018).
 
 ## Opt-out
 
-- Endpoint owners can request removal via a GitHub issue; opt-outs are
-  honored permanently in an exclusion list committed to this repo.
+- Endpoint owners can request exclusion from scanning altogether via a
+  GitHub issue. Opt-outs are honored permanently in an exclusion list
+  committed to this repo, and the batch runner reads that list before
+  every run. Exclusion covers future scans; records already published in
+  the dataset are removed on request as well (ADR-0018).
 
 ## Data handling
 
