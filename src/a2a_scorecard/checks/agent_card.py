@@ -80,12 +80,37 @@ class AgentCardParses(Check):
         )
 
 
+# ADR-0016: generation is inferred from card structure, never from a version
+# string a card may or may not declare.
+
+# v1 AgentCard property (vendor/a2a-v1.0.1.json:208-213); has no v0.x
+# counterpart. Presence of any of these is a decisive v1 signal.
+_V1_SIGNALS = ("supportedInterfaces",)
+
+# None of these are v1 AgentCard properties. In v1, `protocolVersion` exists
+# only inside an AgentInterface (vendor/a2a-v1.0.1.json:297-300), and the v1
+# AgentCard has `additionalProperties: false` (vendor/a2a-v1.0.1.json:86), so
+# any of these at the top level means the card cannot be a valid v1 card.
+# `supportsExtendedAgentCard` moved into `capabilities.extendedAgentCard` in
+# v1 (vendor/specification-v1.0.1.md, section A.2.2).
+_V0X_SIGNALS = (
+    "url",
+    "preferredTransport",
+    "additionalInterfaces",
+    "protocolVersion",
+    "supportsExtendedAgentCard",
+)
+
+
 def _detect_generation(card: dict[str, Any]) -> str:
-    if "supportedInterfaces" in card:
+    # The v1 signal wins when both classes are present (ADR-0016 decision 2):
+    # a card carrying supportedInterfaces AND a legacy field claims v1
+    # structure, and any violation from the legacy field is a genuine defect.
+    if any(signal in card for signal in _V1_SIGNALS):
         return "v1"
-    if "url" in card and ("preferredTransport" in card or "protocolVersion" in card):
+    if any(signal in card for signal in _V0X_SIGNALS):
         return "v0.x"
-    return "unknown"
+    return "undetermined"
 
 
 class AgentCardSchemaValid(Check):
@@ -100,7 +125,13 @@ class AgentCardSchemaValid(Check):
         if ctx.spec_generation == "v0.x":
             return self.result(
                 CheckStatus.SKIP,
-                evidence="v0.x-generation card; v1 schema not applicable",
+                evidence="previous-generation card (v0.x structural signal); "
+                "v1 schema not applicable",
+            )
+        if ctx.spec_generation == "undetermined":
+            return self.result(
+                CheckStatus.SKIP,
+                evidence="card generation could not be determined; v1 schema applicability unknown",
             )
         errors = schema.validate_agent_card(ctx.card)
         if errors:

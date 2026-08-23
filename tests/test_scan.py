@@ -105,6 +105,53 @@ def test_v0x_card_skips_schema_check(fake_agent) -> None:
     assert results["C012"].status is CheckStatus.SKIP
 
 
+def test_version_silent_card_detects_v0x_and_skips(fake_agent) -> None:
+    # ADR-0016 regression (a): a card with top-level "url" and no version
+    # signal at all must still be classified v0.x from "url" alone, and
+    # C012 must SKIP rather than fail it against the v1 schema. This is the
+    # exact shape the 2026-08-22 census found causing 124/400 false FAILs.
+    report = run_scan(fake_agent("version-silent-card"), SETTINGS)
+    results = by_id(report)
+    assert report.spec_generation == "v0.x"
+    assert results["C012"].status is CheckStatus.SKIP
+    assert report.grade != "F"
+
+
+def test_v1_card_detects_v1_and_schema_passes(fake_agent) -> None:
+    # ADR-0016 regression (b): a clean v1 card (supportedInterfaces only,
+    # no legacy fields) detects v1 and C012 runs and passes.
+    report = run_scan(fake_agent("compliant"), SETTINGS)
+    results = by_id(report)
+    assert report.spec_generation == "v1"
+    assert results["C012"].status is CheckStatus.PASS
+
+
+def test_v1_card_with_legacy_fields_still_fails_schema(fake_agent) -> None:
+    # ADR-0016 regression (c): a card carrying BOTH supportedInterfaces and
+    # legacy url/protocolVersion must detect v1 (the v1 signal wins) and
+    # C012 must still FAIL: the legacy top-level fields violate the v1
+    # schema's additionalProperties:false. This guards against the SKIP fix
+    # swallowing a genuine defect.
+    report = run_scan(fake_agent("v1-card-with-legacy-fields"), SETTINGS)
+    results = by_id(report)
+    assert report.spec_generation == "v1"
+    assert results["C012"].status is CheckStatus.FAIL
+
+
+def test_no_generation_signal_card_is_undetermined_and_skips(fake_agent) -> None:
+    # ADR-0016 regression (d): a card with neither a v1 nor a v0.x signal is
+    # genuinely undetermined. C012 must SKIP - a missing version declaration
+    # must never convert into a scored schema failure. This fixture also
+    # declares no interface at all, which is a separate, genuine C013
+    # failure (unrelated to generation detection) that legitimately drags
+    # the grade down; the assertion here is only that C012 itself SKIPs
+    # rather than piling on a schema FAIL.
+    report = run_scan(fake_agent("no-generation-signal-card"), SETTINGS)
+    results = by_id(report)
+    assert report.spec_generation == "undetermined"
+    assert results["C012"].status is CheckStatus.SKIP
+
+
 def test_card_without_skills_warns_semantics(fake_agent) -> None:
     report = run_scan(fake_agent("no-skills"), SETTINGS)
     results = by_id(report)

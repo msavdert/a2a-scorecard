@@ -55,7 +55,8 @@ def make_rest_only_card(base_url: str) -> dict[str, Any]:
 
 class FakeAgentHandler(BaseHTTPRequestHandler):
     # Modes: compliant, no-card, bad-json, invalid-card, card-only, grpc-only,
-    # legacy-location, v0-card, no-skills, no-interface, auth-gated,
+    # legacy-location, v0-card, version-silent-card, v1-card-with-legacy-fields,
+    # no-generation-signal-card, no-skills, no-interface, auth-gated,
     # wrong-error-code, no-error-on-unknown, security-coherent,
     # security-dangling-ref, security-plain-http, security-malformed,
     # security-schemes-not-object, v0-card-with-security, signed-well-formed,
@@ -114,6 +115,50 @@ class FakeAgentHandler(BaseHTTPRequestHandler):
                     "version": "0.9.0",
                     "url": self._base_url(),
                     "protocolVersion": "0.3",
+                    "skills": [
+                        {"id": "echo", "name": "Echo", "description": "Echoes a short reply."}
+                    ],
+                }
+                self._send(200, json.dumps(card).encode())
+            elif self.mode == "version-silent-card":
+                # ADR-0016 regression fixture (a): a real-world shape the
+                # 2026-08-22 census proved exists - top-level "url" and no
+                # version signal at all, neither "protocolVersion" nor
+                # "preferredTransport". Must still detect v0.x from the
+                # "url" signal alone, and C012 must SKIP rather than fail
+                # this card against the v1 schema.
+                card = {
+                    "name": "Fixture Agent version-silent",
+                    "description": "Version-silent legacy-generation fixture card.",
+                    "version": "0.9.0",
+                    "url": self._base_url(),
+                    "skills": [
+                        {"id": "echo", "name": "Echo", "description": "Echoes a short reply."}
+                    ],
+                }
+                self._send(200, json.dumps(card).encode())
+            elif self.mode == "v1-card-with-legacy-fields":
+                # ADR-0016 regression fixture (c): a card carrying BOTH the
+                # v1 "supportedInterfaces" signal and legacy "url" /
+                # "protocolVersion" fields. The v1 signal wins (decision 2)
+                # so this must detect v1 and C012 must still FAIL: the v1
+                # schema sets additionalProperties:false, so the legacy
+                # top-level fields are genuine violations. This guards
+                # against "fixing" the v0.x/undetermined SKIP too broadly.
+                card = make_valid_card(self._base_url())
+                card["url"] = self._base_url()
+                card["protocolVersion"] = "0.3"
+                self._send(200, json.dumps(card).encode())
+            elif self.mode == "no-generation-signal-card":
+                # ADR-0016 regression fixture (d): neither a v1 signal
+                # (supportedInterfaces) nor any v0.x signal (url,
+                # preferredTransport, additionalInterfaces, protocolVersion,
+                # supportsExtendedAgentCard) is present. Generation is
+                # genuinely undetermined and C012 must SKIP.
+                card = {
+                    "name": "Fixture Agent no-generation-signal",
+                    "description": "Card with no structural generation signal.",
+                    "version": "0.9.0",
                     "skills": [
                         {"id": "echo", "name": "Echo", "description": "Echoes a short reply."}
                     ],

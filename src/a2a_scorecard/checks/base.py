@@ -27,8 +27,8 @@ class ProbeContext:
         self.card_url: str | None = None
         self.card_raw: str | None = None
         # "v1" (supportedInterfaces card), "v0.x" (url/preferredTransport card),
-        # or "unknown" until the card has been parsed.
-        self.spec_generation: str = "unknown"
+        # or "undetermined" until the card has been parsed (ADR-0016).
+        self.spec_generation: str = "undetermined"
         # True once the card is known to declare at least one interface URL of
         # any binding; jsonrpc_endpoint stays None for e.g. gRPC-only agents.
         self.has_declared_interface: bool = False
