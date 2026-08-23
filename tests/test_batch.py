@@ -202,8 +202,12 @@ def test_already_done_skips_recent_target_with_zero_requests(fake_agent) -> None
     )
 
     assert summary.outcomes == {BatchOutcome.SKIPPED_RECENT: 1}
-    assert writer.records[0].outcome is BatchOutcome.SKIPPED_RECENT
     assert fake_agent.journal(url) == []
+    # ADR-0024: skipped_recent is counted but NOT written. It records our
+    # scheduler's clock, not anything about the target, and persisting it
+    # meant a same-day re-dispatch committed one row per target saying
+    # nothing happened - 2,479 of them, 1.6 MB, on the first real dispatch.
+    assert writer.records == []
 
 
 def test_already_done_rescans_once_interval_elapsed(fake_agent) -> None:

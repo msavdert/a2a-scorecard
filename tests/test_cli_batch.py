@@ -130,6 +130,63 @@ def test_batch_end_to_end(tmp_path: Path, fake_agent, stub_preflight_ok) -> None
         assert normalize_target(url) in last_scanned
 
 
+def test_batch_removes_a_run_file_that_recorded_nothing(
+    tmp_path: Path, fake_agent, stub_preflight_ok
+) -> None:
+    """ADR-0024: a run whose targets were all skipped leaves no file.
+
+    A header and a footer wrapped around zero target records is not a
+    record of anything, and the workflow would otherwise commit one on
+    every same-day re-dispatch.
+    """
+    url = fake_agent("compliant")
+    targets_path = tmp_path / "targets.jsonl"
+    exclusions_path = tmp_path / "exclusions.jsonl"
+    _write_targets(targets_path, [url])
+    _write_exclusions(exclusions_path, [])
+    out_dir = tmp_path / "data" / "runs"
+
+    assert (
+        main(
+            [
+                "batch",
+                "--targets",
+                str(targets_path),
+                "--exclusions",
+                str(exclusions_path),
+                "--out",
+                str(out_dir),
+                "--workers",
+                "1",
+            ]
+        )
+        == 0
+    )
+    first = sorted(out_dir.glob("run-*.jsonl"))
+    assert len(first) == 1
+
+    # Second run inside the re-scan floor: everything is skipped_recent, so
+    # nothing is written and the file must not survive.
+    assert (
+        main(
+            [
+                "batch",
+                "--targets",
+                str(targets_path),
+                "--exclusions",
+                str(exclusions_path),
+                "--out",
+                str(out_dir),
+                "--workers",
+                "1",
+            ]
+        )
+        == 0
+    )
+    assert sorted(out_dir.glob("run-*.jsonl")) == first
+    assert fake_agent.journal(url) != []
+
+
 def test_batch_honours_rescan_floor(tmp_path: Path, fake_agent, stub_preflight_ok) -> None:
     urls = [fake_agent("compliant", host=h) for h in ("127.0.0.1", "127.0.0.2", "127.0.0.3")]
     targets_path = tmp_path / "targets.jsonl"
@@ -154,14 +211,21 @@ def test_batch_honours_rescan_floor(tmp_path: Path, fake_agent, stub_preflight_o
 
     assert main(args) == 0
 
-    run_files = sorted(out_dir.glob("run-*.jsonl"))
-    assert len(run_files) == 2
-    second_run = dataset.read_run(run_files[1])
-    outcomes = {row["target_id"]: row["outcome"] for row in second_run.targets}
-    for url in urls:
-        assert outcomes[normalize_target(url)] == "skipped_recent"
+    # The floor held: no target was contacted a second time.
     for url in urls:
         assert len(fake_agent.journal(url)) == journal_lengths_before[url]
+
+    # And per ADR-0024 the second run left nothing behind. skipped_recent is
+    # a fact about our scheduler's clock, not about the target, so it is
+    # counted and not written - and a run with no target records does not
+    # keep its file.
+    run_files = sorted(out_dir.glob("run-*.jsonl"))
+    assert len(run_files) == 1
+    first_run = dataset.read_run(run_files[0])
+    assert {row["target_id"] for row in first_run.targets} == {
+        normalize_target(url) for url in urls
+    }
+    assert all(row["outcome"] == "ok" for row in first_run.targets)
 
 
 def test_batch_refuses_when_preflight_fails(

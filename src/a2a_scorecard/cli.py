@@ -142,6 +142,13 @@ def _cmd_batch(args: argparse.Namespace) -> int:
     ) as writer:
         summary = run_batch(submitted, writer, config=config, already_done=already_done)
 
+    # A run that measured nothing leaves no file (ADR-0024): a header and a
+    # footer wrapped around zero target records is not a record of anything,
+    # and committing one on every same-day re-dispatch is pure noise.
+    if not dataset.read_run(run_path).targets:
+        run_path.unlink(missing_ok=True)
+        print("run recorded no targets; removed the empty run file", file=sys.stderr)
+
     index_path = out_dir.parent / "index.json"
     index_path.write_text(json.dumps(rebuild_index(out_dir), indent=2, sort_keys=True) + "\n")
 

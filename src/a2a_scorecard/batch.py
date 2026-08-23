@@ -228,6 +228,19 @@ def run_batch(
         with summary_lock:
             summary.record(record.outcome)
 
+    def count_only(outcome: BatchOutcome) -> None:
+        """Summarise an outcome without writing a dataset record (ADR-0024).
+
+        Reserved for `skipped_recent`, which is a fact about our scheduler's
+        clock rather than about the target: it says only that we ran twice
+        inside the re-scan floor. The run index already records when each
+        target was last scanned, so nothing is lost, and persisting it means
+        a same-day re-dispatch commits thousands of rows recording that
+        nothing happened.
+        """
+        with summary_lock:
+            summary.record(outcome)
+
     for target in excluded:
         emit(_now_record(target, BatchOutcome.EXCLUDED, clock))
 
@@ -254,7 +267,7 @@ def run_batch(
                 continue
             last = already_done(target.target_id)
             if last is not None and (clock() - last) < config.rescan_interval_s:
-                emit(_now_record(target, BatchOutcome.SKIPPED_RECENT, clock))
+                count_only(BatchOutcome.SKIPPED_RECENT)
                 continue
 
             record = _scan_one(target, config, clock, sleep)
