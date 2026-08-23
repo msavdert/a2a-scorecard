@@ -36,9 +36,13 @@ Changes to this policy require an ADR and the owner's explicit approval.
   under the data-handling rules below (ADR-0008).
 - At most one benign REST `message:send` ping per scan, sent only to
   targets whose card declares an HTTP+JSON interface and only when the
-  JSON-RPC pings are not applicable, so a scan sends at most two
-  message pings in total. The ping text identifies itself as a
-  conformance probe (ADR-0008).
+  JSON-RPC pings are not applicable. JSON-RPC and REST pings are mutually
+  exclusive. The ping text identifies itself as a conformance probe
+  (ADR-0008).
+- Message-bearing requests therefore total at most three per scan: at
+  most two JSON-RPC pings (or at most one REST ping instead), plus at
+  most one streaming request. The error-handling probe above is separate
+  and is one request. See ADR-0023 for why this is three and not two.
 - Never: exploit payloads, prompt-injection attempts, auth bypass or
   credential guessing, fuzzing, or requests designed to consume meaningful
   compute on the target.
@@ -48,8 +52,9 @@ Changes to this policy require an ADR and the owner's explicit approval.
 ## Volume and pacing
 
 - A single scan sends fewer than 10 requests to a target, plus at most
-  one bare TLS handshake. At most one of the message pings may be a
-  streaming request.
+  one bare TLS handshake. This ceiling is enforced by a counter in the
+  scan transport, not by review: the tenth request raises and aborts the
+  scan (ADR-0020).
 - Batch scanning serializes requests per host and honors HTTP 429 and
   Retry-After. Re-scan frequency: at most daily per target. The automated
   run is configured monthly, well inside that limit (ADR-0018).
